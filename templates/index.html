@@ -7,18 +7,27 @@
     <link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
     <style>
-        /* Styling specifically for the audio visualizer */
-        .visualizer-container {
-            display: none; 
-            justify-content: center; 
-            align-items: center; 
-            margin: 1.5rem auto; 
-            height: 60px;
-            width: 100%;
+        .visualizer-container { display: none; justify-content: center; align-items: center; margin: 1.5rem auto; height: 60px; width: 100%; }
+        canvas { border-radius: var(--radius-md); }
+        
+        .tasmee-word-box {
+            font-family: var(--font-arabic);
+            font-size: 2.2rem;
+            margin: 0.5rem;
+            padding: 0.2rem 0.5rem;
+            display: inline-block;
+            transition: all 0.3s ease;
         }
-        canvas {
-            border-radius: var(--radius-md);
+        .word-hidden { color: var(--border-color); }
+        .word-revealed { color: var(--success); }
+        .word-error { 
+            color: var(--danger); 
+            background-color: rgba(153, 27, 27, 0.1); 
+            border-bottom: 3px solid var(--danger);
+            border-radius: 4px;
         }
+        .word-corrected { color: var(--accent-gold); }
+        .timer-display { font-size: 1.2rem; font-weight: bold; color: var(--accent-gold); margin-top: 1rem; }
     </style>
 </head>
 <body>
@@ -27,26 +36,19 @@
     
     <!-- LEFT SIDEBAR -->
     <aside class="sidebar">
-        <div class="brand-header">
-            <h1>Academic Portal</h1>
-        </div>
+        <div class="brand-header"><h1>Muhaffiz AI</h1></div>
         
-        <!-- User Profile Card -->
         <div class="profile-section">
-            <div class="profile-avatar">
-                {{ request.session.get("user", "U")[0]|upper }}
-            </div>
+            <div class="profile-avatar">{{ request.session.get("user", "U")[0]|upper }}</div>
             <div class="profile-info">
                 <span class="profile-name">{{ request.session.get("user", "Scholar") }}</span>
-                <span class="profile-role">Registered User</span>
             </div>
         </div>
 
-        <!-- Navigation Menu -->
         <nav class="nav-menu">
-            <button class="nav-item active" onclick="switchTab('tilawat')">📖 Tilawat Reading</button>
-            <button class="nav-item" onclick="switchTab('tasmee')">🎤 Tasmee Recitation</button>
-            <button class="nav-item" onclick="switchTab('ikhtebaar')">📝 Ikhtebaar Testing</button>
+            <button class="nav-item active" onclick="switchTab('tilawat')">📖 Tilawat</button>
+            <button class="nav-item" onclick="switchTab('tasmee')">🎤 Tasmee</button>
+            <button class="nav-item" onclick="switchTab('ikhtebaar')">📝 Ikhtebaar</button>
         </nav>
         
         <a href="/logout" class="logout-btn">Sign Out</a>
@@ -57,26 +59,20 @@
         
         <!-- Tab 1: Tilawat -->
         <div id="tilawat" class="tab-content active">
-            <div class="page-header">
-                <h2>Tilawat Interactive Reading</h2>
-            </div>
-            
+            <div class="page-header"><h2>Al-Quran-ul-Majeed Tilawat</h2></div>
             <div class="control-panel">
                 <label style="font-weight: 500; color: var(--text-muted);">Select Page:</label>
                 <input type="number" id="tilawatPage" value="1" min="1" max="604" style="width: 100px;">
-                <button class="btn-primary" onclick="loadTilawatPage()" id="loadPageBtn">Load Quran</button>
+                <button class="btn-primary" onclick="loadTilawatPage()" id="loadPageBtn">View Quran</button>
                 <span id="loadingStatus" style="color: var(--accent-gold); font-weight: 600; display: none; margin-left: auto;">Processing...</span>
             </div>
             
-            <!-- Audio Tools -->
             <div id="audioControls" class="control-panel" style="display: none; justify-content: center; background: #F8FAFC;">
                 <button class="btn-secondary" onclick="playAudio()">▶ Play</button>
                 <button class="btn-secondary" onclick="pauseAudio()">⏸ Pause</button>
                 <button class="btn-secondary" onclick="stopAudio()">⏹ Stop</button>
                 <button class="btn-secondary" id="btnRepeat" onclick="toggleRepeat()">🔁 Loop: Off</button>
-                
                 <div style="border-left: 2px solid var(--border-color); margin: 0 10px; height: 30px;"></div>
-                
                 <button class="btn-secondary" id="btnSetA" onclick="setPointA()">Ⓐ Set A</button>
                 <button class="btn-secondary" id="btnSetB" onclick="setPointB()">Ⓑ Set B</button>
                 <button class="btn-danger" id="btnClearAB" onclick="clearAB()" style="display:none;">Clear Loop</button>
@@ -88,24 +84,36 @@
                     <img id="mushafImageDisplay" src="" alt="Mushaf Manuscript" style="max-width: 100%; border-radius: 4px; box-shadow: 0 0 10px rgba(0,0,0,0.1); display: none;">
                 </div>
             </div>
-
             <audio id="tilawatAudio" style="display: none;"></audio>
         </div>
 
-        <!-- Tab 2: Tasmee -->
+        <!-- Tab 2: Tasmee (UPDATED WITH RANGE) -->
         <div id="tasmee" class="tab-content">
-            <div class="page-header">
-                <h2>Tasmee Recitation Practice</h2>
-            </div>
+            <div class="page-header"><h2>Tasmee Recitation</h2></div>
             
-            <div class="control-panel">
-                <select id="tasmeeMode" onchange="updateTasmeeInput()">
-                    <option value="page">Page Module</option>
-                    <option value="surah">Surah Module</option>
-                    <option value="juz">Juz Module</option>
+            <div class="control-panel" style="flex-wrap: wrap; gap: 12px;">
+                <select id="tasmeeMode" onchange="updateTasmeeInput()" style="padding: 0.5rem;">
+                    <option value="page">Page Range</option>
+                    <option value="surah">Surah Range</option>
                 </select>
-                <input type="number" id="tasmeeValue" value="1" min="1" max="604" style="width: 100px;" oninput="updateTasmeeInput()">
-                <span id="tasmeeMaxLabel" style="font-weight: 500; color: var(--text-muted);">(Max: 604)</span>
+                
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <label id="tasmeeLabelFrom" style="font-weight: 600; color: var(--text-main);">From Page:</label>
+                    <input type="number" id="tasmeeValueFrom" value="1" min="1" max="604" style="width: 75px; padding: 0.5rem;" oninput="updateTasmeeInput()">
+                </div>
+                
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <label id="tasmeeLabelTo" style="font-weight: 600; color: var(--text-main);">To Page:</label>
+                    <input type="number" id="tasmeeValueTo" value="1" min="1" max="604" style="width: 75px; padding: 0.5rem;" oninput="updateTasmeeInput()">
+                </div>
+                
+                <div style="border-left: 2px solid var(--border-color); height: 30px;"></div>
+                <label style="font-weight: 500; color: var(--text-muted);">Talqeen Method:</label>
+                <select id="talqeenType" style="padding: 0.5rem;">
+                    <option value="auto">Auto (15s Timer)</option>
+                    <option value="manual">Manual (Show Button)</option>
+                </select>
+
                 <button class="btn-primary" onclick="prepareTasmee()" style="margin-left: auto;">Prepare Module</button>
             </div>
             
@@ -114,66 +122,122 @@
                 
                 <button id="tasmeeRecordBtn" class="btn-danger" onclick="toggleTasmeeRecording()" disabled style="padding: 1rem 2rem; font-size: 1.1rem;">🎤 Initiate Recitation</button>
                 
-                <!-- NEW: Voice Visualizer for Tasmee -->
                 <div class="visualizer-container" id="tasmeeVisualizer">
                     <canvas id="tasmeeCanvas" width="250" height="60"></canvas>
                 </div>
-
+                
                 <div id="tasmeeStatus" style="margin-top: 1.5rem; font-weight: 600;"></div>
-                <div id="tasmeeFeedback" class="feedback-box arabic-text" style="display: none;"></div>
+                
+                <div id="tasmeeFeedback" class="feedback-box arabic-text" style="display: none; direction: rtl; line-height: 2.5;"></div>
+                
+                <div id="talqeenControls" style="margin-top: 1.5rem; display: none;">
+                    <div id="timerDisplay" class="timer-display" style="display: none;">
+                        Auto-Revealing in: <span id="countdownText">15</span>s
+                    </div>
+                    <button id="manualRevealBtn" class="btn-primary" style="display: none; background-color: var(--accent-gold);" onclick="revealTalqeenWord()">
+                        Reveal Next Word (Talqeen)
+                    </button>
+                </div>
             </div>
         </div>
 
-        <!-- Tab 3: Ikhtebaar -->
+        <!-- Tab 3: Ikhtebaar (REMOVED JUZ) -->
         <div id="ikhtebaar" class="tab-content">
-            <div class="page-header">
-                <h2>Ikhtebaar Assessment</h2>
-            </div>
+            <div class="page-header"><h2>Ikhtebaar</h2></div>
             
-            <div class="control-panel">
-                <button class="btn-primary" onclick="generateIkhtebaarQuestion()">Generate Assessment Prompt</button>
+            <div class="control-panel" style="flex-wrap: wrap; gap: 12px;">
+                <select id="ikhMode" onchange="updateIkhInput()" style="padding: 0.5rem;">
+                    <option value="page">Page Range</option>
+                    <option value="surah">Surah Range</option>
+                </select>
+                
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <label id="ikhLabelFrom" style="font-weight: 600; color: var(--text-main);">From Page:</label>
+                    <input type="number" id="ikhValueFrom" value="1" min="1" max="604" style="width: 75px; padding: 0.5rem;" oninput="updateIkhInput()">
+                </div>
+                
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <label id="ikhLabelTo" style="font-weight: 600; color: var(--text-main);">To Page:</label>
+                    <input type="number" id="ikhValueTo" value="10" min="1" max="604" style="width: 75px; padding: 0.5rem;" oninput="updateIkhInput()">
+                </div>
+                
+                <div style="border-left: 2px solid var(--border-color); height: 30px;"></div>
+                
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <label style="font-weight: 600; color: var(--text-main);">Difficulty:</label>
+                    <select id="ikhDifficulty" style="padding: 0.5rem;">
+                        <option value="easy">Easy</option>
+                        <option value="medium">Medium</option>
+                        <option value="hard">Hard</option>
+                    </select>
+                </div>
+
+                <button class="btn-primary" onclick="generateIkhtebaarQuestion()" style="margin-left: auto;">Generate Prompt</button>
             </div>
             
             <div id="ikhWorkspace" class="image-workspace" style="display: none;">
-                <p style="color: var(--danger); font-weight: 600; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 1px;">Required Recitation:</p>
-                <div id="ikhTargetRef" style="color: var(--text-muted); font-size: 1rem; margin-bottom: 1.5rem;"></div>
-                <h2 id="ikhTargetLabel" class="quran-text" style="margin-bottom: 2.5rem; color: var(--sidebar-bg);"></h2>
                 
-                <button id="ikhRecordBtn" class="btn-danger" onclick="toggleIkhRecording()" style="padding: 1rem 2rem; font-size: 1.1rem;">🎤 Record Answer</button>
-                
-                <!-- NEW: Voice Visualizer for Ikhtebaar -->
-                <div class="visualizer-container" id="ikhVisualizer">
-                    <canvas id="ikhCanvas" width="250" height="60"></canvas>
+                <div style="background: #F8FAFC; padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border-color); margin-bottom: 2rem;">
+                    <p style="color: var(--danger); font-weight: 600; margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 1px;">Start Reciting From:</p>
+                    <h2 id="ikhStartText" class="quran-text" style="color: var(--sidebar-bg); margin-bottom: 1.5rem; text-align: center;"></h2>
+                    
+                    <p style="color: var(--danger); font-weight: 600; margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 1px;">And Stop At:</p>
+                    <h3 id="ikhStopText" class="quran-text" style="color: var(--text-muted); text-align: center;"></h3>
                 </div>
+                
+                <!-- Hint & Reveal System -->
+                <div class="control-panel" id="ikhHintControls" style="justify-content: center; background: #fff; margin-bottom: 2rem; flex-wrap: wrap; gap: 10px;">
+                    <button class="btn-secondary" id="btnHint1" onclick="showIkhHint(1)">💡 Hint 1 (First Ayah)</button>
+                    <button class="btn-secondary" id="btnHint2" onclick="showIkhHint(2)" style="display: none;">💡 Hint 2 (Surah Info)</button>
+                    <button class="btn-secondary" id="btnHint3" onclick="showIkhHint(3)" style="display: none;">💡 Hint 3 (Preceding Ayahs)</button>
+                    
+                    <div style="border-left: 2px solid var(--border-color); height: 30px;"></div>
+                    <button class="btn-primary" id="btnRevealPage" style="background-color: var(--accent-gold);" onclick="revealIkhtebaarPage()">📖 Reveal Page</button>
+                </div>
+                
+                <div id="ikhHintDisplay" class="feedback-box arabic-text" style="display: none; background-color: #FEF2F2; color: var(--sidebar-bg); font-size: 1.8rem; margin-bottom: 2rem;"></div>
 
-                <div id="ikhStatus" style="margin-top: 1.5rem; font-weight: 600;"></div>
-                <div id="ikhFeedback" class="feedback-box arabic-text" style="display: none;"></div>
+                <div id="ikhImageWrapper" style="display: none; text-align: center; margin-bottom: 2rem;">
+                    <img id="ikhMushafDisplay" src="" style="max-width: 100%; border-radius: 4px; box-shadow: 0 0 10px rgba(0,0,0,0.1);">
+                </div>
+                
+                <div style="text-align: center;">
+                    <button id="ikhRecordBtn" class="btn-danger" onclick="toggleIkhRecording()" style="padding: 1rem 2rem; font-size: 1.1rem;">🎤 Record Answer</button>
+                    <div class="visualizer-container" id="ikhVisualizer"><canvas id="ikhCanvas" width="250" height="60"></canvas></div>
+                    <div id="ikhStatus" style="margin-top: 1.5rem; font-weight: 600;"></div>
+                    <div id="ikhFeedback" class="feedback-box arabic-text" style="display: none; direction: rtl;"></div>
+                </div>
             </div>
         </div>
-        
     </main>
 </div>
 
 <script>
     // --- Application State ---
-    let audioChunks = [];
-    let mediaRecorder = null;
-    let expectedTasmeeText = "";
-    let expectedIkhText = "";
-    
+    let cachedJsonData = null;
     const audioEl = document.getElementById('tilawatAudio');
     let isLooping = false;
-    let pointA = null;
-    let pointB = null;
-    let cachedJsonData = null;
+    let pointA = null; let pointB = null;
 
-    // --- Visualizer State ---
-    let audioContext;
-    let analyser;
-    let animationId;
-    let visualizerStream;
+    let audioContext, analyser, animationId, visualizerStream;
 
-    // --- Tab Switching ---
+    // --- Background Data ---
+    async function prefetchQuranData() {
+        if (cachedJsonData) return;
+        try {
+            const res = await fetch('/data/quran_data.json');
+            cachedJsonData = await res.json();
+            console.log("Quran pages loaded.");
+        } catch (e) {
+            console.error("Background download failed.", e);
+        }
+    }
+    window.onload = () => { 
+        updateTasmeeInput(); 
+        updateIkhInput();
+        prefetchQuranData(); 
+    };
+
     function switchTab(tabId) {
         document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
         document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
@@ -182,73 +246,450 @@
         stopAudio(); 
     }
 
-    // --- Audio Player & Loop Controls ---
-    function playAudio() { audioEl.play(); }
-    function pauseAudio() { audioEl.pause(); }
-    function stopAudio() { audioEl.pause(); audioEl.currentTime = 0; }
+    // ==============================================================
+    // TASMEE LOGIC (UPDATED WITH RANGE)
+    // ==============================================================
+    let isTasmeeRecording = false;
+    let tasmeeMediaRecorder = null;
+    let targetWordsArray = [];
+    let currentWordIndex = 0;
+    let isProcessingChunk = false;
+    let countdownInterval = null;
+    let secondsLeft = 15;
 
-    function toggleRepeat() {
-        isLooping = !isLooping;
-        audioEl.loop = isLooping;
-        const btn = document.getElementById('btnRepeat');
-        btn.innerText = isLooping ? "🔁 Loop: On" : "🔁 Loop: Off";
-        btn.style.background = isLooping ? "var(--accent-gold)" : "#F1F5F9";
-        btn.style.color = isLooping ? "white" : "var(--text-main)";
+    function updateTasmeeInput() {
+        const mode = document.getElementById('tasmeeMode').value;
+        const inputFrom = document.getElementById('tasmeeValueFrom');
+        const inputTo = document.getElementById('tasmeeValueTo');
+        const labelFrom = document.getElementById('tasmeeLabelFrom');
+        const labelTo = document.getElementById('tasmeeLabelTo');
+        
+        let maxVal = 604;
+        let modeName = "Page";
+        
+        if (mode === 'page') { maxVal = 604; modeName = "Page"; }
+        else if (mode === 'surah') { maxVal = 114; modeName = "Surah"; }
+        
+        labelFrom.innerText = `From ${modeName}:`;
+        labelTo.innerText = `To ${modeName}:`;
+        
+        inputFrom.max = maxVal;
+        inputTo.max = maxVal;
+        
+        if (parseInt(inputFrom.value) > maxVal) inputFrom.value = maxVal;
+        if (parseInt(inputTo.value) > maxVal) inputTo.value = maxVal;
     }
 
-    function setPointA() {
-        pointA = audioEl.currentTime;
-        const btn = document.getElementById('btnSetA');
-        btn.style.background = "var(--accent-gold)";
-        btn.style.color = "white";
-        updateABStatus();
+    async function prepareTasmee() {
+        const mode = document.getElementById('tasmeeMode').value;
+        const startVal = parseInt(document.getElementById('tasmeeValueFrom').value);
+        const endVal = parseInt(document.getElementById('tasmeeValueTo').value);
+        const statusEl = document.getElementById('tasmeeStatus');
+        
+        if (startVal > endVal) {
+            statusEl.innerText = "Error: 'From' value cannot be greater than 'To' value.";
+            statusEl.style.color = "var(--danger)";
+            return;
+        }
+
+        document.getElementById('tasmeeWorkspace').style.display = 'block';
+        statusEl.innerText = "Fetching text...";
+        statusEl.style.color = "var(--text-main)";
+        document.getElementById('tasmeeTargetLabel').innerText = `Target: ${mode.toUpperCase()} ${startVal} to ${endVal}`;
+        
+        try {
+            const res = await fetch(`/api/tasmee_target?mode=${mode}&start_val=${startVal}&end_val=${endVal}`);
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+            
+            targetWordsArray = data.expected_text.split(" ").filter(w => w.trim().length > 0);
+            currentWordIndex = 0;
+            renderHiddenTasmeeText();
+            
+            statusEl.innerText = "Ready. Initiate when prepared.";
+            document.getElementById('tasmeeRecordBtn').disabled = false;
+        } catch (e) {
+            statusEl.innerText = "Connection failed: " + e.message;
+            statusEl.style.color = "var(--danger)";
+        }
     }
 
-    function setPointB() {
-        if (pointA !== null && audioEl.currentTime > pointA) {
-            pointB = audioEl.currentTime;
-            const btn = document.getElementById('btnSetB');
+    function renderHiddenTasmeeText() {
+        const container = document.getElementById('tasmeeFeedback');
+        container.innerHTML = "";
+        container.style.display = 'block';
+        
+        targetWordsArray.forEach((word, index) => {
+            const span = document.createElement('span');
+            span.id = `tasmee_word_${index}`;
+            span.className = 'tasmee-word-box word-hidden';
+            span.innerText = 'ـــــ'; 
+            container.appendChild(span);
+        });
+        resetTalqeenUI();
+    }
+
+    async function toggleTasmeeRecording() {
+        const btn = document.getElementById('tasmeeRecordBtn');
+        if (isTasmeeRecording) stopTasmeeLogic(btn);
+        else startTasmeeLogic(btn);
+    }
+
+    async function startTasmeeLogic(btn) {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            visualizerStream = stream;
+            
+            document.getElementById('tasmeeVisualizer').style.display = 'flex';
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioContext.createMediaStreamSource(stream);
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 64; 
+            source.connect(analyser);
+            drawVisualizer('tasmeeCanvas');
+
+            tasmeeMediaRecorder = new MediaRecorder(stream);
+            tasmeeMediaRecorder.ondataavailable = async (e) => {
+                if(e.data.size > 0 && isTasmeeRecording) await sendAudioChunkToWhisper(e.data);
+            };
+            
+            tasmeeMediaRecorder.start(2000); 
+            isTasmeeRecording = true;
+            isProcessingChunk = false;
+            
+            btn.innerText = "⏹ Conclude Recitation";
             btn.style.background = "var(--accent-gold)";
-            btn.style.color = "white";
-            document.getElementById('btnClearAB').style.display = "inline-block";
-            updateABStatus();
-        } else {
-            alert("Point B must be set after Point A.");
+            document.getElementById('tasmeeStatus').innerText = "Listening... Start reciting.";
+        } catch (err) {
+            document.getElementById('tasmeeStatus').innerText = "Microphone access denied.";
         }
     }
 
-    function clearAB() {
-        pointA = null;
-        pointB = null;
-        document.getElementById('btnSetA').style.background = "#F1F5F9";
-        document.getElementById('btnSetA').style.color = "var(--text-main)";
-        document.getElementById('btnSetB').style.background = "#F1F5F9";
-        document.getElementById('btnSetB').style.color = "var(--text-main)";
-        document.getElementById('btnClearAB').style.display = "none";
-        updateABStatus();
+    function stopTasmeeLogic(btn) {
+        isTasmeeRecording = false;
+        if(tasmeeMediaRecorder) tasmeeMediaRecorder.stop();
+        cancelAnimationFrame(animationId);
+        if (audioContext && audioContext.state !== 'closed') audioContext.close();
+        document.getElementById('tasmeeVisualizer').style.display = 'none';
+        if(visualizerStream) visualizerStream.getTracks().forEach(t => t.stop());
+        resetTalqeenUI();
+        btn.innerText = "🎤 Initiate Recitation";
+        btn.style.background = "var(--danger)";
+        document.getElementById('tasmeeStatus').innerText = "Session concluded.";
     }
 
-    function updateABStatus() {
-        const status = document.getElementById('abStatus');
-        if (pointA !== null && pointB !== null) {
-            status.innerText = `[A-B Loop: ${pointA.toFixed(1)}s - ${pointB.toFixed(1)}s]`;
-        } else if (pointA !== null) {
-            status.innerText = `[A Set: ${pointA.toFixed(1)}s]`;
-        } else {
-            status.innerText = "";
+    async function sendAudioChunkToWhisper(audioBlob) {
+        if(currentWordIndex >= targetWordsArray.length) {
+            document.getElementById('tasmeeStatus').innerText = "All words revealed. Waiting for manual conclusion...";
+            return;
+        }
+
+        if (analyser) {
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            analyser.getByteFrequencyData(dataArray);
+            let sum = 0;
+            for(let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+            let averageVolume = sum / dataArray.length;
+            
+            if (averageVolume < 10) return; 
+        }
+
+        if (isProcessingChunk) return; 
+        isProcessingChunk = true;
+
+        const formData = new FormData();
+        formData.append("file", audioBlob, "chunk.wav");
+        formData.append("expected_word", targetWordsArray[currentWordIndex]);
+
+        try {
+            const res = await fetch('/api/tasmee_chunk_process', { method: 'POST', body: formData });
+            const data = await res.json();
+            handleSystemEvaluation(data.status);
+        } catch(e) { 
+            console.error(e); 
+        } finally {
+            isProcessingChunk = false;
         }
     }
 
-    audioEl.addEventListener('timeupdate', () => {
-        if (pointA !== null && pointB !== null) {
-            if (audioEl.currentTime >= pointB) {
-                audioEl.currentTime = pointA;
-                audioEl.play();
+    function handleSystemEvaluation(result) {
+        if (!isTasmeeRecording || currentWordIndex >= targetWordsArray.length) return;
+        const currentSpan = document.getElementById(`tasmee_word_${currentWordIndex}`);
+        
+        if (result === 'match') {
+            currentSpan.innerText = targetWordsArray[currentWordIndex];
+            currentSpan.className = 'tasmee-word-box word-revealed';
+            currentWordIndex++;
+            resetTalqeenUI();
+        } else if (result === 'mistake') {
+            currentSpan.className = 'tasmee-word-box word-hidden word-error';
+            triggerTalqeenSystem();
+        }
+    }
+
+    function triggerTalqeenSystem() {
+        const talqeenType = document.getElementById('talqeenType').value;
+        const controlsDiv = document.getElementById('talqeenControls');
+        controlsDiv.style.display = 'block';
+
+        if (talqeenType === 'auto') {
+            if (countdownInterval) return; 
+            document.getElementById('timerDisplay').style.display = 'block';
+            document.getElementById('manualRevealBtn').style.display = 'none';
+            secondsLeft = 15;
+            document.getElementById('countdownText').innerText = secondsLeft;
+            
+            countdownInterval = setInterval(() => {
+                secondsLeft--;
+                document.getElementById('countdownText').innerText = secondsLeft;
+                if (secondsLeft <= 0) revealTalqeenWord();
+            }, 1000);
+        } else {
+            document.getElementById('timerDisplay').style.display = 'none';
+            document.getElementById('manualRevealBtn').style.display = 'inline-block';
+        }
+    }
+
+    function revealTalqeenWord() {
+        if (currentWordIndex >= targetWordsArray.length) return;
+        const currentSpan = document.getElementById(`tasmee_word_${currentWordIndex}`);
+        currentSpan.innerText = targetWordsArray[currentWordIndex];
+        currentSpan.className = 'tasmee-word-box word-corrected';
+        currentWordIndex++;
+        resetTalqeenUI();
+    }
+
+    function resetTalqeenUI() {
+        clearInterval(countdownInterval);
+        countdownInterval = null;
+        document.getElementById('talqeenControls').style.display = 'none';
+    }
+
+
+    // ==============================================================
+    // IKHTEBAAR LOGIC (REMOVED JUZ)
+    // ==============================================================
+    let currentIkhData = null; 
+    let askedIkhQuestions = []; 
+    let expectedIkhText = ""; 
+    let isIkhRecording = false;
+    let ikhMediaRecorder = null;
+    let ikhAudioChunks = [];
+
+    function updateIkhInput() {
+        const mode = document.getElementById('ikhMode').value;
+        const inputFrom = document.getElementById('ikhValueFrom');
+        const inputTo = document.getElementById('ikhValueTo');
+        const labelFrom = document.getElementById('ikhLabelFrom');
+        const labelTo = document.getElementById('ikhLabelTo');
+        
+        let maxVal = 604;
+        let modeName = "Page";
+        
+        if (mode === 'page') { maxVal = 604; modeName = "Page"; }
+        else if (mode === 'surah') { maxVal = 114; modeName = "Surah"; }
+        
+        labelFrom.innerText = `From ${modeName}:`;
+        labelTo.innerText = `To ${modeName}:`;
+        
+        inputFrom.max = maxVal;
+        inputTo.max = maxVal;
+        
+        if (parseInt(inputFrom.value) > maxVal) inputFrom.value = maxVal;
+        if (parseInt(inputTo.value) > maxVal) inputTo.value = maxVal;
+    }
+
+    async function generateIkhtebaarQuestion() {
+        const mode = document.getElementById('ikhMode').value;
+        const startVal = parseInt(document.getElementById('ikhValueFrom').value);
+        const endVal = parseInt(document.getElementById('ikhValueTo').value);
+        const diff = document.getElementById('ikhDifficulty').value;
+        const statusEl = document.getElementById('ikhStatus');
+        
+        if (startVal > endVal) {
+            statusEl.innerText = "Error: 'From' value cannot be greater than 'To' value.";
+            statusEl.style.color = "var(--danger)";
+            return;
+        }
+        
+        document.getElementById('ikhWorkspace').style.display = 'block';
+        statusEl.innerText = "Generating test...";
+        statusEl.style.color = "var(--text-main)";
+        
+        document.getElementById('btnHint1').style.display = 'inline-block';
+        document.getElementById('btnHint2').style.display = 'none';
+        document.getElementById('btnHint3').style.display = 'none';
+        document.getElementById('btnRevealPage').style.display = 'inline-block';
+        document.getElementById('ikhHintDisplay').style.display = 'none';
+        document.getElementById('ikhImageWrapper').style.display = 'none';
+        document.getElementById('ikhFeedback').style.display = 'none';
+        
+        try {
+            const excludeStr = askedIkhQuestions.join(",");
+            const res = await fetch(`/api/generate_ikhtebaar?mode=${mode}&start_val=${startVal}&end_val=${endVal}&difficulty=${diff}&exclude=${excludeStr}`);
+            const data = await res.json();
+            
+            if (data.error) {
+                statusEl.innerText = data.error;
+                statusEl.style.color = "var(--danger)";
+                return;
+            }
+            
+            askedIkhQuestions.push(data.question_id);
+            currentIkhData = data;
+            expectedIkhText = data.expected_full_text; 
+            
+            document.getElementById('ikhStartText').innerText = data.start_text;
+            document.getElementById('ikhStopText').innerText = data.stop_text;
+            statusEl.innerText = "Ready. Initiate recording.";
+            
+        } catch (e) {
+            statusEl.innerText = "Failed to generate assessment.";
+        }
+    }
+
+    function showIkhHint(level) {
+        if (!currentIkhData) return;
+        const display = document.getElementById('ikhHintDisplay');
+        display.style.display = 'block';
+        
+        if (level === 1) {
+            display.innerText = "💡 First Ayah of Page: " + currentIkhData.hint_1;
+            display.style.fontFamily = "var(--font-arabic)";
+            display.style.fontSize = "1.8rem";
+            document.getElementById('btnHint2').style.display = 'inline-block';
+        } else if (level === 2) {
+            display.innerText = "💡 Hint: " + currentIkhData.hint_2;
+            display.style.fontFamily = "var(--font-ui)";
+            display.style.fontSize = "1.2rem";
+            document.getElementById('btnHint3').style.display = 'inline-block';
+        } else if (level === 3) {
+            display.innerText = "💡 Preceding Ayahs: " + currentIkhData.hint_3;
+            display.style.fontFamily = "var(--font-arabic)";
+            display.style.fontSize = "1.8rem";
+        }
+    }
+
+    async function revealIkhtebaarPage() {
+        if (!currentIkhData) return;
+        const wrapper = document.getElementById('ikhImageWrapper');
+        const img = document.getElementById('ikhMushafDisplay');
+        const status = document.getElementById('ikhStatus');
+        
+        if (!cachedJsonData) {
+            status.innerText = "Misri Quran is Loading...";
+            try {
+                const res = await fetch('/data/quran_data.json');
+                cachedJsonData = await res.json();
+            } catch (e) {
+                status.innerText = "Failed to load Quran pages.";
+                return;
             }
         }
-    });
+        
+        const pageData = cachedJsonData.find(p => p.page_number === currentIkhData.page_number);
+        if (pageData) {
+            img.src = pageData.image_base64;
+            wrapper.style.display = 'block';
+            status.innerText = "Page Revealed.";
+        } else {
+            status.innerText = "Page image not found in JSON data.";
+        }
+    }
 
-    // --- Dynamic Rendering Logic ---
+    async function toggleIkhRecording() {
+        const btn = document.getElementById('ikhRecordBtn');
+        if (isIkhRecording) stopIkhRecording(btn);
+        else startIkhRecording(btn);
+    }
+
+    async function startIkhRecording(btn) {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            visualizerStream = stream;
+            
+            document.getElementById('ikhVisualizer').style.display = 'flex';
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioContext.createMediaStreamSource(stream);
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 64; 
+            source.connect(analyser);
+            drawVisualizer('ikhCanvas');
+
+            ikhMediaRecorder = new MediaRecorder(stream);
+            ikhAudioChunks = [];
+            
+            ikhMediaRecorder.ondataavailable = e => {
+                if(e.data.size > 0) ikhAudioChunks.push(e.data);
+            };
+            
+            ikhMediaRecorder.onstop = async () => {
+                const audioBlob = new Blob(ikhAudioChunks, { type: 'audio/wav' });
+                await sendIkhAudioForGrading(audioBlob);
+            };
+            
+            ikhMediaRecorder.start();
+            isIkhRecording = true;
+            
+            btn.innerText = "⏹ Conclude Answer";
+            btn.style.background = "var(--accent-gold)";
+            document.getElementById('ikhStatus').innerText = "Recording active. Recite your answer.";
+            document.getElementById('ikhFeedback').style.display = 'none';
+        } catch (err) {
+            document.getElementById('ikhStatus').innerText = "Microphone access denied.";
+        }
+    }
+
+    function stopIkhRecording(btn) {
+        if (!isIkhRecording) return;
+        isIkhRecording = false;
+        
+        if(ikhMediaRecorder) ikhMediaRecorder.stop(); 
+        cancelAnimationFrame(animationId);
+        if (audioContext && audioContext.state !== 'closed') audioContext.close();
+        document.getElementById('ikhVisualizer').style.display = 'none';
+        if(visualizerStream) visualizerStream.getTracks().forEach(t => t.stop());
+        
+        btn.innerText = "🎤 Record Answer";
+        btn.style.background = "var(--danger)";
+        document.getElementById('ikhStatus').innerText = "Processing submission...";
+    }
+
+    async function sendIkhAudioForGrading(audioBlob) {
+        const formData = new FormData();
+        formData.append("file", audioBlob, "ikhtebaar.wav");
+        formData.append("expected_text", expectedIkhText);
+
+        try {
+            const res = await fetch('/transcribe_and_compare', { method: 'POST', body: formData });
+            const result = await res.json();
+            
+            if (!res.ok) { document.getElementById('ikhStatus').innerText = "Server Fault."; return; }
+            if (result.error) { document.getElementById('ikhStatus').innerText = "Processing Fault: " + result.error; return; }
+            
+            document.getElementById('ikhStatus').innerText = "Analysis Complete. Score: " + result.score + "%";
+            
+            const container = document.getElementById('ikhFeedback');
+            container.style.display = 'block';
+            container.style.lineHeight = '2.5';
+            container.innerHTML = "";
+            
+            result.comparison.forEach(item => {
+                const span = document.createElement('span');
+                span.innerText = item.word + " ";
+                span.className = "tasmee-word-box " + (item.status === 'match' ? 'word-revealed' : 'word-error');
+                container.appendChild(span);
+            });
+            
+        } catch (e) { 
+            console.error(e);
+            document.getElementById('ikhStatus').innerText = "Connection lost during grading."; 
+        }
+    }
+
+    // ==============================================================
+    // TILAWAT LOGIC
+    // ==============================================================
     async function loadTilawatPage() {
         const pageNum = parseInt(document.getElementById('tilawatPage').value);
         const imageDisplay = document.getElementById('mushafImageDisplay');
@@ -261,14 +702,14 @@
         
         try {
             if (!cachedJsonData) {
-                statusLabel.innerText = "Loading Misri Quran...";
+                statusLabel.innerText = "Misri Quran is Loading...";
                 const jsonResponse = await fetch('/data/quran_data.json'); 
                 cachedJsonData = await jsonResponse.json();
             }
 
             statusLabel.innerText = "Rendering page...";
-
             const pageData = cachedJsonData.find(p => p.page_number === pageNum);
+            
             if (!pageData) {
                 statusLabel.innerText = `Page ${pageNum} not found.`;
                 statusLabel.style.color = "var(--danger)"; 
@@ -282,6 +723,7 @@
                 try {
                     statusLabel.innerText = "Aligning structural mapping...";
                     const res = await fetch(`/api/page_boxes/${pageNum}`);
+                    if (!res.ok) throw new Error("Database mapping failed.");
                     const boxData = await res.json();
                     
                     const natWidth = imageDisplay.naturalWidth;
@@ -290,25 +732,21 @@
                     boxData.boxes.forEach(box => {
                         const div = document.createElement('div');
                         div.className = 'ayah-box';
-                        
                         div.style.left = ((box.min_x / natWidth) * 100) + '%';
                         div.style.top = ((box.min_y / natHeight) * 100) + '%';
                         div.style.width = (((box.max_x - box.min_x) / natWidth) * 100) + '%';
                         div.style.height = (((box.max_y - box.min_y) / natHeight) * 100) + '%';
-                        
                         div.onclick = () => playTilawatAudio(box.global_id);
                         wrapper.appendChild(div);
                     });
                     
                     statusLabel.style.display = "none";
                 } catch (e) {
-                    console.error(e);
                     statusLabel.innerText = "Mapping Error.";
                     statusLabel.style.color = "var(--danger)";
                 }
             };
         } catch(e) {
-            console.error(e);
             statusLabel.innerText = "Database Error.";
             statusLabel.style.color = "var(--danger)";
         }
@@ -320,202 +758,56 @@
         audioEl.src = `/api/audio/${globalAyahId}`;
         audioEl.play();
     }
-
-    // --- Tasmee Logic ---
-    function updateTasmeeInput() {
-        const mode = document.getElementById('tasmeeMode').value;
-        const input = document.getElementById('tasmeeValue');
-        const label = document.getElementById('tasmeeMaxLabel');
-        
-        if (mode === 'page') { input.max = 604; label.innerText = '(Max: 604)'; }
-        else if (mode === 'surah') { input.max = 114; label.innerText = '(Max: 114)'; }
-        else if (mode === 'juz') { input.max = 30; label.innerText = '(Max: 30)'; }
-        
-        if (parseInt(input.value) > parseInt(input.max)) { input.value = input.max; }
+    function playAudio() { audioEl.play(); }
+    function pauseAudio() { audioEl.pause(); }
+    function stopAudio() { audioEl.pause(); audioEl.currentTime = 0; }
+    function toggleRepeat() {
+        isLooping = !isLooping;
+        audioEl.loop = isLooping;
+        const btn = document.getElementById('btnRepeat');
+        btn.innerText = isLooping ? "🔁 Loop: On" : "🔁 Loop: Off";
+        btn.style.background = isLooping ? "var(--accent-gold)" : "#F1F5F9";
+        btn.style.color = isLooping ? "white" : "var(--text-main)";
     }
-
-    async function prepareTasmee() {
-        const mode = document.getElementById('tasmeeMode').value;
-        const val = document.getElementById('tasmeeValue').value;
-        const ws = document.getElementById('tasmeeWorkspace');
-        const btn = document.getElementById('tasmeeRecordBtn');
-        const status = document.getElementById('tasmeeStatus');
-        
-        ws.style.display = 'block';
-        status.innerText = "Fetching text...";
-        document.getElementById('tasmeeTargetLabel').innerText = `Target: ${mode.toUpperCase()} ${val}`;
-        
-        try {
-            const res = await fetch(`/api/tasmee_target?mode=${mode}&value=${val}`);
-            const data = await res.json();
-            if (data.error) {
-                status.innerText = "Error: " + data.error;
-                btn.disabled = true;
-            } else {
-                expectedTasmeeText = data.expected_text;
-                status.innerText = "Ready. Initiate when prepared.";
-                btn.disabled = false;
-            }
-        } catch (e) {
-            status.innerText = "Connection failed.";
+    function setPointA() { pointA = audioEl.currentTime; updateABStatus(); }
+    function setPointB() { pointB = audioEl.currentTime; document.getElementById('btnClearAB').style.display = "inline-block"; updateABStatus(); }
+    function clearAB() { pointA = null; pointB = null; document.getElementById('btnClearAB').style.display = "none"; updateABStatus(); }
+    function updateABStatus() { 
+        const status = document.getElementById('abStatus');
+        if (pointA !== null && pointB !== null) status.innerText = `[A-B Loop: ${pointA.toFixed(1)}s - ${pointB.toFixed(1)}s]`;
+        else if (pointA !== null) status.innerText = `[A Set: ${pointA.toFixed(1)}s]`;
+        else status.innerText = "";
+    }
+    audioEl.addEventListener('timeupdate', () => {
+        if (pointA !== null && pointB !== null && audioEl.currentTime >= pointB) {
+            audioEl.currentTime = pointA;
+            audioEl.play();
         }
-    }
+    });
 
-    // --- Ikhtebaar Logic ---
-    async function generateIkhtebaarQuestion() {
-        document.getElementById('ikhWorkspace').style.display = 'block';
-        document.getElementById('ikhTargetRef').innerText = "Surah Al-Baqarah, Ayah 255 (Ayatul Kursi)";
-        document.getElementById('ikhTargetLabel').innerText = "اللَّهُ لَا إِلَٰهَ إِلَّا هُوَ الْحَيُّ الْقَيُّومُ";
-        expectedIkhText = "اللَّهُ لَا إِلَٰهَ إِلَّا هُوَ الْحَيُّ الْقَيُّومُ"; 
-        document.getElementById('ikhStatus').innerText = "Ready. Initiate recording.";
-    }
-
-    // --- Voice Visualizer Animation ---
+    // ==============================================================
+    // VISUALIZER HELPER
+    // ==============================================================
     function drawVisualizer(canvasId) {
         const canvas = document.getElementById(canvasId);
         const canvasCtx = canvas.getContext("2d");
         const bufferLength = analyser.frequencyBinCount;
         const dataArray = new Uint8Array(bufferLength);
-
         function draw() {
             animationId = requestAnimationFrame(draw);
             analyser.getByteFrequencyData(dataArray);
-
-            // Clear the canvas for the new frame
             canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
-
             const barWidth = (canvas.width / bufferLength) * 2.5;
-            let barHeight;
-            let x = 0;
-
+            let barHeight, x = 0;
             for (let i = 0; i < bufferLength; i++) {
-                barHeight = dataArray[i] / 4; // Scale height appropriately
-
-                // Using the theme's gold accent color
+                barHeight = dataArray[i] / 4; 
                 canvasCtx.fillStyle = "#B48608";
                 canvasCtx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
-
                 x += barWidth + 2;
             }
         }
         draw();
     }
-
-    // --- Unified Recording Logic ---
-    async function toggleTasmeeRecording() {
-        const btn = document.getElementById('tasmeeRecordBtn');
-        if (mediaRecorder && mediaRecorder.state === "recording") {
-            mediaRecorder.stop();
-            btn.innerText = "🎤 Initiate Recitation";
-            btn.style.background = "var(--danger)";
-            document.getElementById('tasmeeStatus').innerText = "Processing submission...";
-        } else {
-            startRecording('tasmeeStatus', btn);
-        }
-    }
-
-    async function toggleIkhRecording() {
-        const btn = document.getElementById('ikhRecordBtn');
-        if (mediaRecorder && mediaRecorder.state === "recording") {
-            mediaRecorder.stop();
-            btn.innerText = "🎤 Record Answer";
-            btn.style.background = "var(--danger)";
-            document.getElementById('ikhStatus').innerText = "Processing submission...";
-        } else {
-            startRecording('ikhStatus', btn);
-        }
-    }
-
-    async function startRecording(statusId, btnElement) {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            visualizerStream = stream; // Keep a reference to stop the mic tracks later
-            mediaRecorder = new MediaRecorder(stream);
-            audioChunks = [];
-            
-            // Determine which visualizer container and canvas to activate
-            const isTasmee = (statusId === 'tasmeeStatus');
-            const visualizerContainer = document.getElementById(isTasmee ? 'tasmeeVisualizer' : 'ikhVisualizer');
-            const canvasId = isTasmee ? 'tasmeeCanvas' : 'ikhCanvas';
-            
-            visualizerContainer.style.display = 'flex';
-            
-            // Set up Web Audio API for the visualizer
-            audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            const source = audioContext.createMediaStreamSource(stream);
-            analyser = audioContext.createAnalyser();
-            analyser.fftSize = 64; // Limits the number of bars for a cleaner look
-            source.connect(analyser);
-            
-            drawVisualizer(canvasId);
-            
-            mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
-            
-            mediaRecorder.onstop = () => {
-                const targetText = isTasmee ? expectedTasmeeText : expectedIkhText;
-                const feedbackId = isTasmee ? 'tasmeeFeedback' : 'ikhFeedback';
-                
-                // Cleanup Visualizer & Microphone
-                cancelAnimationFrame(animationId);
-                if (audioContext.state !== 'closed') audioContext.close();
-                visualizerContainer.style.display = 'none';
-                visualizerStream.getTracks().forEach(track => track.stop());
-
-                sendAudio(statusId, feedbackId, targetText);
-            };
-            
-            mediaRecorder.start();
-            btnElement.innerText = "⏹ Conclude Recitation";
-            btnElement.style.background = "var(--accent-gold)";
-            document.getElementById(statusId).innerText = "Recording active...";
-        } catch (err) {
-            console.error(err);
-            document.getElementById(statusId).innerText = "Microphone access denied.";
-        }
-    }
-
-    async function sendAudio(statusId, feedbackId, expectedText) {
-        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
-        audioChunks = [];
-        const formData = new FormData();
-        formData.append("file", audioBlob, "rec.wav");
-        
-        if (!expectedText || expectedText.trim() === "") {
-            document.getElementById(statusId).innerText = "System Error: Missing reference text.";
-            return;
-        }
-        
-        formData.append("expected_text", expectedText);
-
-        try {
-            const res = await fetch('/transcribe_and_compare', { method: 'POST', body: formData });
-            const result = await res.json();
-            
-            if (!res.ok) { document.getElementById(statusId).innerText = "Server Fault."; return; }
-            if (result.error) { document.getElementById(statusId).innerText = "Processing Fault: " + result.error; return; }
-            
-            document.getElementById(statusId).innerText = "Analysis Complete";
-            renderFeedback(result.comparison, feedbackId);
-        } catch (e) { 
-            console.error(e);
-            document.getElementById(statusId).innerText = "Connection lost."; 
-        }
-    }
-
-    function renderFeedback(comparisonData, targetId) {
-        const container = document.getElementById(targetId);
-        container.style.display = 'block';
-        container.innerHTML = "";
-        
-        comparisonData.forEach(item => {
-            const span = document.createElement('span');
-            span.innerText = item.word + " ";
-            span.className = "quran-word " + (item.status === 'match' ? 'revealed' : 'wrong');
-            container.appendChild(span);
-        });
-    }
-
-    window.onload = () => { updateTasmeeInput(); };
 </script>
 
 </body>
