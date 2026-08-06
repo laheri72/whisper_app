@@ -1,0 +1,32 @@
+# Python Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+env/
+tasme_ai/
+tasmee_ai/
+Lib/
+Scripts/
+Include/
+pyvenv.cfg
+
+# SQLite Database
+*.db
+*.sqlite3
+
+# Audio Temp Files
+*.wav
+*.mp3
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Ignore data and audio folders
+data/
+audio/
+others/

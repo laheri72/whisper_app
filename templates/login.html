@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Portal Access - Academic Portal</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <!-- Links to your main university theme -->
+    <link rel="stylesheet" href="/static/style.css">
+    
+    <style>
+        /* Specific overrides to perfectly center the authentication box */
+        body {
+            background-color: var(--bg-body);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        
+        .auth-wrapper {
+            width: 100%;
+            max-width: 420px;
+            padding: 2.5rem;
+            background: var(--bg-surface);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-md);
+            border: 1px solid var(--border-color);
+        }
+        
+        .auth-header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        
+        .auth-header h1 {
+            font-size: 1.5rem;
+            color: var(--sidebar-bg);
+            margin-bottom: 0.5rem;
+        }
+        
+        .auth-header p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+        
+        .auth-form-group {
+            margin-bottom: 1.25rem;
+        }
+        
+        .auth-label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: var(--text-main);
+        }
+        
+        .auth-input {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            font-family: var(--font-ui);
+            font-size: 1rem;
+            background-color: #F8FAFC;
+            transition: all 0.2s;
+        }
+        
+        .auth-input:focus {
+            outline: none;
+            border-color: var(--accent-gold);
+            box-shadow: 0 0 0 3px rgba(180, 134, 8, 0.1);
+        }
+        
+        .auth-btn {
+            width: 100%;
+            padding: 0.85rem;
+            background-color: var(--sidebar-bg);
+            color: white;
+            border: none;
+            border-radius: var(--radius-md);
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            margin-top: 1rem;
+        }
+        
+        .auth-btn:hover {
+            background-color: var(--sidebar-hover);
+        }
+        
+        .auth-footer {
+            text-align: center;
+            margin-top: 2rem;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+        
+        .auth-footer a {
+            color: var(--accent-gold);
+            text-decoration: none;
+            font-weight: 600;
+        }
+        
+        .auth-footer a:hover {
+            text-decoration: underline;
+        }
+        
+        .error-banner {
+            background-color: #FEF2F2;
+            color: var(--danger);
+            padding: 0.75rem;
+            border-radius: var(--radius-md);
+            border: 1px solid #FCA5A5;
+            margin-bottom: 1.5rem;
+            font-size: 0.9rem;
+            font-weight: 500;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="auth-wrapper">
+        <div class="auth-header">
+            <h1>Portal Access</h1>
+            <p>Enter your credentials to continue</p>
+        </div>
+        
+        <!-- Error displays cleanly matching the theme -->
+        {% if error %}
+            <div class="error-banner">{{ error }}</div>
+        {% endif %}
+        
+        <form action="/login" method="POST">
+            <div class="auth-form-group">
+                <label class="auth-label">Identification Number</label>
+                <!-- Retains your exact 5-digit pattern requirement -->
+                <input type="text" name="username" class="auth-input" placeholder="5-Digit ID" required pattern="\d{5}" title="Identification Number must be exactly 5 numeric digits.">
+            </div>
+            
+            <div class="auth-form-group">
+                <label class="auth-label">Security Passcode</label>
+                <!-- Retains your min 5-digit pattern requirement -->
+                <input type="password" name="password" class="auth-input" placeholder="Minimum 5 Digits" required pattern="\d{5,}" title="Passcode must be at least 5 numeric digits long.">
+            </div>
+            
+            <button type="submit" class="auth-btn">Access Portal</button>
+        </form>
+        
+        <div class="auth-footer">
+            Don't have an account? <a href="/register">Register here</a>
+        </div>
+    </div>
+</body>
+</html>

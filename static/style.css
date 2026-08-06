@@ -1,0 +1,256 @@
+/* ==========================================================================
+   University-Grade Theme Variables
+   ========================================================================== */
+:root {
+    /* Color Palette */
+    --bg-body: #F3F5F8;
+    --bg-surface: #FFFFFF;
+    --sidebar-bg: #0F172A;
+    --sidebar-hover: #1E293B;
+    --text-main: #334155;
+    --text-muted: #64748B;
+    --text-light: #F8FAFC;
+    --accent-gold: #B48608;
+    --accent-gold-hover: #926C05;
+    --danger: #991B1B;
+    --success: #166534;
+    --border-color: #E2E8F0;
+    
+    /* Typography */
+    --font-ui: 'Inter', -apple-system, sans-serif;
+    --font-arabic: 'Amiri', serif;
+    
+    /* Structural */
+    --radius-md: 6px;
+    --radius-lg: 12px;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+    --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03);
+}
+
+/* ==========================================================================
+   Reset & Base Styles
+   ========================================================================== */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: var(--font-ui);
+    background-color: var(--bg-body);
+    color: var(--text-main);
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* ==========================================================================
+   App Layout (Sidebar + Main Content)
+   ========================================================================== */
+.app-container {
+    display: flex;
+    width: 100%;
+    height: 100vh;
+}
+
+/* Sidebar */
+.sidebar {
+    width: 280px;
+    background-color: var(--sidebar-bg);
+    color: var(--text-light);
+    display: flex;
+    flex-direction: column;
+    box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+    z-index: 10;
+}
+
+.brand-header {
+    padding: 2rem 1.5rem;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    text-align: center;
+}
+
+.brand-header h1 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    letter-spacing: 1px;
+    color: var(--accent-gold);
+    text-transform: uppercase;
+}
+
+/* Profile Section */
+.profile-section {
+    padding: 2rem 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+
+.profile-avatar {
+    width: 45px;
+    height: 45px;
+    background-color: var(--accent-gold);
+    color: #fff;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    font-weight: bold;
+}
+
+.profile-info {
+    display: flex;
+    flex-direction: column;
+}
+
+.profile-name { font-weight: 600; font-size: 1rem; }
+.profile-role { font-size: 0.8rem; color: #94A3B8; }
+
+/* Navigation */
+.nav-menu {
+    flex-grow: 1;
+    padding: 1.5rem 0;
+}
+
+.nav-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: #94A3B8;
+    padding: 1rem 2rem;
+    font-size: 1rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border-left: 3px solid transparent;
+}
+
+.nav-item:hover {
+    background-color: var(--sidebar-hover);
+    color: var(--text-light);
+}
+
+.nav-item.active {
+    background-color: var(--sidebar-hover);
+    color: var(--accent-gold);
+    border-left-color: var(--accent-gold);
+}
+
+.logout-btn {
+    margin: 1.5rem;
+    padding: 0.75rem;
+    text-align: center;
+    background-color: transparent;
+    border: 1px solid rgba(255,255,255,0.2);
+    color: var(--text-light);
+    border-radius: var(--radius-md);
+    text-decoration: none;
+    font-size: 0.9rem;
+    transition: background 0.2s;
+}
+
+.logout-btn:hover { background-color: rgba(255,255,255,0.05); }
+
+/* Main Content Area */
+.main-content {
+    flex-grow: 1;
+    overflow-y: auto;
+    padding: 2.5rem 3rem;
+}
+
+.tab-content { display: none; animation: fadeIn 0.4s ease; }
+.tab-content.active { display: block; }
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ==========================================================================
+   UI Components (Controls, Cards, Buttons)
+   ========================================================================== */
+.page-header {
+    margin-bottom: 2rem;
+    padding-bottom: 1rem;
+    border-bottom: 2px solid var(--border-color);
+}
+
+.page-header h2 { font-size: 1.5rem; font-weight: 600; color: var(--sidebar-bg); }
+
+.control-panel {
+    background-color: var(--bg-surface);
+    padding: 1.5rem;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    border: 1px solid var(--border-color);
+    margin-bottom: 2rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+input[type="number"], select {
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    font-family: var(--font-ui);
+    font-size: 0.95rem;
+    outline: none;
+    transition: all 0.2s;
+    background-color: #F8FAFC;
+}
+
+input[type="number"]:focus, select:focus {
+    border-color: var(--accent-gold);
+    box-shadow: 0 0 0 3px rgba(180, 134, 8, 0.1);
+}
+
+.btn-primary {
+    background-color: var(--sidebar-bg);
+    color: white;
+    border: none;
+    padding: 0.6rem 1.5rem;
+    border-radius: var(--radius-md);
+    font-size: 0.95rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+.btn-primary:hover { background-color: var(--sidebar-hover); }
+
+.btn-secondary {
+    background-color: #F1F5F9;
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+    padding: 0.6rem 1.2rem;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.btn-secondary:hover { background-color: #E2E8F0; }
+
+.btn-danger { background-color: var(--danger); color: white; border: none; padding: 0.6rem 1.5rem; border-radius: var(--radius-md); cursor: pointer; }
+.btn-danger:hover { background-color: #7F1D1D; }
+
+/* Interactive Map Overlays */
+.image-workspace {
+    background: var(--bg-surface);
+    padding: 2rem;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md);
+    border: 1px solid var(--border-color);
+    text-align: center;
+}
+
+.image-wrapper { position: relative; display: inline-block; max-width: 100%; }
+.ayah-box { position: absolute; cursor: pointer; background-color: transparent; transition: background-color 0.2s ease; border-radius: 4px; }
+.ayah-box:hover { background-color: rgba(180, 134, 8, 0.2); }
+
+/* Typography */
+.quran-text { font-family: var(--font-arabic); font-size: 2.2rem; line-height: 2.2; color: var(--sidebar-bg); direction: rtl; }
+.feedback-box { margin-top: 2rem; padding: 2.5rem; background-color: #F8FAFC; border: 1px solid var(--border-color); border-radius: var(--radius-lg); min-height: 120px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.02); }
+.quran-word { font-family: var(--font-arabic); font-size: 2rem; margin: 0 0.3rem; display: inline-block; }
+.quran-word.revealed { color: var(--success); }
+.quran-word.wrong { color: var(--danger); text-decoration: underline; text-decoration-color: rgba(153, 27, 27, 0.3); text-decoration-thickness: 3px; }
