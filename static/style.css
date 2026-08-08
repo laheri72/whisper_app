@@ -254,3 +254,130 @@ input[type="number"]:focus, select:focus {
 .quran-word { font-family: var(--font-arabic); font-size: 2rem; margin: 0 0.3rem; display: inline-block; }
 .quran-word.revealed { color: var(--success); }
 .quran-word.wrong { color: var(--danger); text-decoration: underline; text-decoration-color: rgba(153, 27, 27, 0.3); text-decoration-thickness: 3px; }
+
+/* Active Ayah Box Highlight on Manuscript */
+.ayah-box.active-ayah {
+    background-color: rgba(180, 134, 8, 0.25) !important;
+    border: 2px solid var(--accent-gold) !important;
+    box-shadow: 0 0 12px rgba(180, 134, 8, 0.6) !important;
+    z-index: 5;
+    animation: ayahPulse 1.5s infinite alternate;
+}
+
+@keyframes ayahPulse {
+    from { box-shadow: 0 0 8px rgba(180, 134, 8, 0.4); }
+    to { box-shadow: 0 0 16px rgba(180, 134, 8, 0.8); }
+}
+
+/* Enhanced Audio Player Control Bar */
+.audio-player-bar {
+    background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%);
+    color: var(--text-light);
+    padding: 1.25rem 2rem;
+    border-radius: var(--radius-lg);
+    box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.3);
+    margin-bottom: 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.audio-header-info {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.ayah-title-badge {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.ayah-title-badge .badge-surah {
+    background: var(--accent-gold);
+    color: white;
+    padding: 0.35rem 0.85rem;
+    border-radius: 20px;
+    font-weight: 600;
+    font-size: 0.9rem;
+    box-shadow: 0 2px 6px rgba(180, 134, 8, 0.4);
+}
+
+.ayah-title-badge .badge-details {
+    color: #94A3B8;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.audio-controls-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.btn-audio-cmd {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-light);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    transition: all 0.2s ease;
+}
+
+.btn-audio-cmd:hover {
+    background: rgba(255, 255, 255, 0.18);
+    transform: translateY(-1px);
+}
+
+.btn-audio-cmd.active-toggle {
+    background: var(--accent-gold);
+    border-color: var(--accent-gold);
+    color: white;
+    box-shadow: 0 2px 8px rgba(180, 134, 8, 0.4);
+}
+
+.audio-progress-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    width: 100%;
+}
+
+.audio-time-label {
+    font-size: 0.85rem;
+    color: #94A3B8;
+    min-width: 45px;
+    text-align: center;
+}
+
+.audio-progress-bar {
+    flex-grow: 1;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 3px;
+    appearance: none;
+    outline: none;
+    cursor: pointer;
+}
+
+.audio-progress-bar::-webkit-slider-thumb {
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent-gold);
+    cursor: pointer;
+    box-shadow: 0 0 6px rgba(180, 134, 8, 0.8);
+}

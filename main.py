@@ -139,10 +139,66 @@ async def get_audio(global_id: int):
     file_path = f"audio/{global_id}.mp3"
     
     if os.path.exists(file_path):
-        return FileResponse(file_path, media_type="audio/mpeg")
+        return FileResponse(
+            file_path, 
+            media_type="audio/mpeg",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0"
+            }
+        )
     else:
         print(f"❌ ERROR: Could not find {file_path}")
         raise HTTPException(status_code=404, detail="Audio file not found.")
+
+SURAH_NAMES = [
+    "", "Al-Fatiha", "Al-Baqarah", "Ali 'Imran", "An-Nisa", "Al-Ma'idah", "Al-An'am", "Al-A'raf", "Al-Anfal", "At-Tawbah", "Yunus",
+    "Hud", "Yusuf", "Ar-Ra'd", "Ibrahim", "Al-Hijr", "An-Nahl", "Al-Isra", "Al-Kahf", "Maryam", "Taha",
+    "Al-Anbiya", "Al-Hajj", "Al-Mu'minun", "An-Nur", "Al-Furqan", "Ash-Shu'ara", "An-Naml", "Al-Qasas", "Al-'Ankabut", "Ar-Rum",
+    "Luqman", "As-Sajdah", "Al-Ahzab", "Saba", "Fatir", "Ya-Sin", "As-Saffat", "Sad", "Az-Zumar", "Ghafir",
+    "Fussilat", "Ash-Shura", "Az-Zukhruf", "Ad-Dukhan", "Al-Jathiyah", "Al-Ahqaf", "Muhammad", "Al-Fath", "Al-Hujurat", "Qaf",
+    "Adh-Dhariyat", "At-Tur", "An-Najm", "Al-Qamar", "Ar-Rahman", "Al-Waqi'ah", "Al-Hadid", "Al-Mujadila", "Al-Hashr", "Al-Mumtahanah",
+    "As-Saff", "Al-Jumu'ah", "Al-Munafiqun", "At-Taghabun", "At-Talaq", "At-Tahrim", "Al-Mulk", "Al-Qalam", "Al-Haqqah", "Al-Ma'arij",
+    "Nuh", "Al-Jinn", "Al-Muzzammil", "Al-Muddaththir", "Al-Qiyamah", "Al-Insan", "Al-Mursalat", "An-Naba", "An-Nazi'at", "'Abasa",
+    "At-Takwir", "Al-Infitar", "Al-Mutaffifin", "Al-Inshiqaq", "Al-Buruj", "At-Tariq", "Al-A'la", "Al-Ghashiyah", "Al-Fajr", "Al-Balad",
+    "Ash-Shams", "Al-Layl", "Ad-Duha", "Ash-Sharh", "At-Tin", "Al-'Alaq", "Al-Qadr", "Al-Bayyinah", "Az-Zalzalah", "Al-'Adiyat",
+    "Al-Qari'ah", "At-Takathur", "Al-'Asr", "Al-Humazah", "Al-Fil", "Quraysh", "Al-Ma'un", "Al-Kawthar", "Al-Kafirun", "An-Nasr",
+    "Al-Masad", "Al-Ikhlas", "Al-Falaq", "An-Nas"
+]
+
+@app.get("/api/ayah_info/{global_id}")
+async def get_ayah_info(global_id: int):
+    try:
+        conn_text = sqlite3.connect("file2.db")
+        cursor_text = conn_text.cursor()
+        cursor_text.execute("SELECT surah_number, ayah_number FROM quran_text WHERE id = ?", (global_id,))
+        row = cursor_text.fetchone()
+        conn_text.close()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Ayah not found")
+            
+        surah, ayah = row[0], row[1]
+        
+        conn_map = sqlite3.connect("file1.db")
+        cursor_map = conn_map.cursor()
+        cursor_map.execute("SELECT page_number FROM glyphs_publication_1 WHERE sura_number = ? AND ayah_number = ? LIMIT 1", (surah, ayah))
+        p_row = cursor_map.fetchone()
+        conn_map.close()
+        
+        page = p_row[0] if p_row else 1
+        surah_name = SURAH_NAMES[surah] if 1 <= surah <= 114 else f"Surah {surah}"
+        
+        return {
+            "global_id": global_id,
+            "surah": surah,
+            "ayah": ayah,
+            "surah_name": surah_name,
+            "page": page
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ==========================================
