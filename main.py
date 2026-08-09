@@ -25,55 +25,44 @@ templates = Jinja2Templates(directory="templates")
 # ==========================================
 @app.get("/")
 async def home(request: Request):
-    user = request.session.get("user")
-    if not user:
-        return RedirectResponse(url="/login", status_code=303)
+    # Serve the React application immediately; React handles auth routing via /api/me
     return templates.TemplateResponse(request=request, name="index.html")
 
 @app.get("/register")
 async def register_page(request: Request):
-    return templates.TemplateResponse(request=request, name="register.html")
+    return RedirectResponse(url="/")
 
 @app.post("/register")
 async def process_register(request: Request, username: str = Form(...), password: str = Form(...)):
     if len(username) != 5 or not username.isdigit():
-        return templates.TemplateResponse(
-            request=request, name="register.html", 
-            context={"error": "Identification Number must be exactly 5 numeric digits."}
-        )
+        return {"error": "Identification Number must be exactly 5 numeric digits."}
     
     if len(password) < 5:
-        return templates.TemplateResponse(
-            request=request, name="register.html", 
-            context={"error": "Passcode must be at least 5 characters long."}
-        )
+        return {"error": "Passcode must be at least 5 characters long."}
     
     conn = sqlite3.connect("users.db")
     cursor = conn.cursor()
-    cursor.execute("CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, display_name TEXT)")
     
     try:
         cursor.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, password))
         conn.commit()
     except sqlite3.IntegrityError:
         conn.close()
-        return templates.TemplateResponse(
-            request=request, name="register.html", 
-            context={"error": "This Identification Number is already registered."}
-        )
+        return {"error": "This Identification Number is already registered."}
     
     conn.close()
-    return RedirectResponse(url="/login", status_code=303)
+    return {"success": True, "user": username}
 
 @app.get("/login")
 async def login_page(request: Request):
-    return templates.TemplateResponse(request=request, name="login.html")
+    return RedirectResponse(url="/")
 
 @app.post("/login")
 async def process_login(request: Request, username: str = Form(...), password: str = Form(...)):
     conn = sqlite3.connect("users.db")
     cursor = conn.cursor()
-    cursor.execute("CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, display_name TEXT)")
     
     cursor.execute("SELECT * FROM users WHERE username = ? AND password = ?", (username, password))
     user = cursor.fetchone()
@@ -81,18 +70,94 @@ async def process_login(request: Request, username: str = Form(...), password: s
     
     if user:
         request.session["user"] = username
-        return RedirectResponse(url="/", status_code=303)
+        return {"success": True, "user": username}
     else:
-        return templates.TemplateResponse(
-            request=request, name="login.html", 
-            context={"error": "Invalid Identification Number or Passcode."}
-        )
+        return {"error": "Invalid Identification Number or Passcode."}
 
 @app.get("/logout")
 async def logout(request: Request):
     request.session.clear()
     return RedirectResponse(url="/login", status_code=303)
 
+@app.get("/api/me")
+async def get_current_user(request: Request):
+    username = request.session.get("user")
+    if not username:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+    cursor.execute("CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, display_name TEXT)")
+    
+    cursor.execute("PRAGMA table_info(users)")
+    columns = [info[1] for info in cursor.fetchall()]
+    if "display_name" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
+        conn.commit()
+        
+    cursor.execute("SELECT display_name FROM users WHERE username = ?", (username,))
+    row = cursor.fetchone()
+    display_name = row[0] if row else None
+    conn.close()
+    
+    return {
+        "id": username,
+        "username": username,
+        "display_name": display_name,
+        "is_first_login": display_name is None or display_name.strip() == ""
+    }
+
+@app.post("/api/update_profile")
+async def update_profile(request: Request, data: dict):
+    username = request.session.get("user")
+    if not username:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    display_name = data.get("display_name")
+    if not display_name or not display_name.strip():
+        raise HTTPException(status_code=400, detail="Display name is required")
+        
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+    cursor.execute("CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, display_name TEXT)")
+    
+    cursor.execute("PRAGMA table_info(users)")
+    columns = [info[1] for info in cursor.fetchall()]
+    if "display_name" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
+        conn.commit()
+        
+    cursor.execute("UPDATE users SET display_name = ? WHERE username = ?", (display_name.strip(), username))
+    conn.commit()
+    conn.close()
+    
+    return {"status": "success", "display_name": display_name.strip()}
+
+@app.post("/api/login")
+async def api_login(request: Request, data: dict):
+    username = data.get("username")
+    password = data.get("password")
+    
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="Username and password are required")
+        
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+    cursor.execute("CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, display_name TEXT)")
+    cursor.execute("SELECT * FROM users WHERE username = ? AND password = ?", (username, password))
+    user = cursor.fetchone()
+    conn.close()
+    
+    if user:
+        request.session["user"] = username
+        return {"status": "success", "username": username}
+    else:
+        raise HTTPException(status_code=401, detail="Invalid username or passcode")
+
+@app.post("/api/logout")
+async def api_logout(request: Request):
+    request.session.clear()
+    return {"status": "success"}
 
 # ==========================================
 # 2. TILAWAT MANUSCRIPT & MAPPING ROUTES

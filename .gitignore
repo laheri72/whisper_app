@@ -17,6 +17,7 @@ pyvenv.cfg
 *.db
 *.sqlite3
 
+
 # Audio Temp Files
 *.wav
 *.mp3
