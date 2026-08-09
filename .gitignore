@@ -1,9 +1,14 @@
+# Node Modules & Build Output
+node_modules/
+dist/
+
 # Python Bytecode
 __pycache__/
 *.py[cod]
 *$py.class
 
 # Virtual Environments
+.venv/
 venv/
 env/
 tasme_ai/
@@ -17,15 +22,15 @@ pyvenv.cfg
 *.db
 *.sqlite3
 
-
 # Audio Temp Files
 *.wav
 *.mp3
 
-# IDE / OS
+# IDE / OS / Logs
 .vscode/
 .idea/
 .DS_Store
+*.log
 
 # Ignore data and audio folders
 data/

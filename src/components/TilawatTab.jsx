@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { BookOpen, Play, Pause, ChevronLeft, ChevronRight, Volume2, Info, Layers, RefreshCw, FileText, RotateCcw, Activity } from 'lucide-react';
 import { getJuzPageRange, JUZ_LIST, SURAH_LIST } from '../utils/juzMapping';
 
@@ -24,12 +24,9 @@ export const TilawatTab = () => {
   const [naturalDimensions, setNaturalDimensions] = useState({ width: 1000, height: 1000 });
 
   // Advanced Audio Features
-  const [autoNext, setAutoNext] = useState(false);
+  const [autoNext, setAutoNext] = useState(true);
   const [isLooping, setIsLooping] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
-  
-  // State for cross-page auto play async handling
-  const [pendingAutoPlay, setPendingAutoPlay] = useState(false);
 
   const audioRef = useRef(null);
 
@@ -47,6 +44,16 @@ export const TilawatTab = () => {
   useEffect(() => { mappedBoxesRef.current = mappedBoxes; }, [mappedBoxes]);
   useEffect(() => { selectedAyahRef.current = selectedAyah; }, [selectedAyah]);
   useEffect(() => { currentPageRef.current = currentPage; }, [currentPage]);
+
+  // Deduplicate mappedBoxes by global_id for clean rendering in Ayah List View
+  const uniqueAyahList = useMemo(() => {
+    const seen = new Set();
+    return mappedBoxes.filter(box => {
+      if (seen.has(box.global_id)) return false;
+      seen.add(box.global_id);
+      return true;
+    });
+  }, [mappedBoxes]);
 
   // Fetch quran_data.json once on mount
   useEffect(() => {
@@ -94,17 +101,6 @@ export const TilawatTab = () => {
     }
   }, [currentPage, quranData]);
 
-  // Refactored useEffect to handle async delay for cross-page autoplay cleanly
-  useEffect(() => {
-    if (pendingAutoPlay && mappedBoxes.length > 0) {
-      const firstAyah = mappedBoxes[0];
-      setSelectedAyah(firstAyah);
-      playTilawatAudio(firstAyah.global_id);
-      fetchAyahInfo(firstAyah.global_id);
-      setPendingAutoPlay(false);
-    }
-  }, [mappedBoxes, pendingAutoPlay]);
-
   // Image load handler to capture actual coordinates space size
   const handleImageLoad = (e) => {
     const { naturalWidth, naturalHeight } = e.target;
@@ -122,19 +118,92 @@ export const TilawatTab = () => {
     return `data:image/jpeg;base64,${base64String}`;
   };
 
+  const stopCurrentAudio = () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.onended = null;
+      audioRef.current.onerror = null;
+      audioRef.current.src = "";
+      audioRef.current = null;
+    }
+  };
+
+  // Helper to find the next DISTINCT Ayah box on the page (bypassing multi-line duplicate boxes for the same Ayah)
+  const getNextAyahBox = (currentBoxes, currentAyah) => {
+    if (!currentBoxes || currentBoxes.length === 0 || !currentAyah) return null;
+    
+    // Find the LAST box index corresponding to the currently playing Ayah global_id
+    let lastIndex = -1;
+    for (let i = currentBoxes.length - 1; i >= 0; i--) {
+      if (currentBoxes[i].global_id === currentAyah.global_id) {
+        lastIndex = i;
+        break;
+      }
+    }
+
+    if (lastIndex !== -1 && lastIndex < currentBoxes.length - 1) {
+      return currentBoxes[lastIndex + 1];
+    }
+    return null; // Indicates that the last Ayah of the current page has finished
+  };
+
   const fetchPageBoxes = async (page) => {
     setLoadingBoxes(true);
     try {
       const res = await fetch(`/api/page_boxes/${page}`);
       if (res.ok) {
         const data = await res.json();
-        setMappedBoxes(data.boxes || []);
+        const boxes = data.boxes || [];
+        setMappedBoxes(boxes);
+        mappedBoxesRef.current = boxes;
       } else {
         setMappedBoxes([]);
+        mappedBoxesRef.current = [];
       }
     } catch (err) {
       console.error("Error fetching page boxes:", err);
       setMappedBoxes([]);
+      mappedBoxesRef.current = [];
+    } finally {
+      setLoadingBoxes(false);
+    }
+  };
+
+  const changePageAndPlay = async (targetPage, shouldAutoPlay = false) => {
+    setLoadingBoxes(true);
+    setCurrentPage(targetPage);
+    try {
+      const res = await fetch(`/api/page_boxes/${targetPage}`);
+      if (res.ok) {
+        const data = await res.json();
+        const boxes = data.boxes || [];
+        setMappedBoxes(boxes);
+        mappedBoxesRef.current = boxes;
+        
+        if (shouldAutoPlay && boxes.length > 0) {
+          const firstAyah = boxes[0];
+          fetchAyahInfo(firstAyah.global_id);
+          playTilawatAudio(firstAyah);
+        } else if (shouldAutoPlay) {
+          stopCurrentAudio();
+          setIsPlayingAudio(false);
+        }
+      } else {
+        setMappedBoxes([]);
+        mappedBoxesRef.current = [];
+        if (shouldAutoPlay) {
+          stopCurrentAudio();
+          setIsPlayingAudio(false);
+        }
+      }
+    } catch (err) {
+      console.error("Error fetching page boxes for page change:", err);
+      setMappedBoxes([]);
+      mappedBoxesRef.current = [];
+      if (shouldAutoPlay) {
+        stopCurrentAudio();
+        setIsPlayingAudio(false);
+      }
     } finally {
       setLoadingBoxes(false);
     }
@@ -144,7 +213,7 @@ export const TilawatTab = () => {
     const juz = parseInt(juzNum, 10);
     setSelectedJuz(juz);
     const range = getJuzPageRange(juz);
-    setCurrentPage(range.startPage);
+    changePageAndPlay(range.startPage, isPlayingAudio);
   };
 
   const handleSurahSelect = (surahId) => {
@@ -152,19 +221,36 @@ export const TilawatTab = () => {
     if (surah) {
       setSelectedSurah(surah.id);
       const startP = parseInt(surah.pages.split('-')[0], 10);
-      if (!isNaN(startP)) setCurrentPage(startP);
+      if (!isNaN(startP)) {
+        changePageAndPlay(startP, isPlayingAudio);
+      }
     }
   };
 
-  const playTilawatAudio = (globalId) => {
-    if (audioRef.current) {
-      audioRef.current.pause();
+  const playTilawatAudio = (boxOrGlobalId) => {
+    stopCurrentAudio(); // Guarantee single audio instance playing!
+
+    let targetBox = null;
+    let globalId = null;
+
+    if (typeof boxOrGlobalId === 'object' && boxOrGlobalId !== null) {
+      targetBox = boxOrGlobalId;
+      globalId = boxOrGlobalId.global_id;
+    } else {
+      globalId = boxOrGlobalId;
+      targetBox = mappedBoxesRef.current.find(b => b.global_id === globalId) || selectedAyahRef.current;
     }
+
+    // Synchronously update ref & React state to prevent stale closure loops
+    selectedAyahRef.current = targetBox;
+    if (targetBox) {
+      setSelectedAyah(targetBox);
+    }
+
     setAudioGlobalId(globalId);
     setIsPlayingAudio(true);
     
     const newAudio = new Audio(`/api/audio/${globalId}`);
-    // Set initial speed based on active speed selection
     newAudio.playbackRate = playbackSpeedRef.current;
     audioRef.current = newAudio;
 
@@ -173,31 +259,28 @@ export const TilawatTab = () => {
       setIsPlayingAudio(false);
     });
 
-    // Enforce Advanced Loop & Auto-Next Logic when Audio finishes playing
+    // Enforce Advanced Loop & Auto-Next Logic when Audio finishes playing (Continuous Reading)
     newAudio.onended = () => {
       setIsPlayingAudio(false);
       
       if (isLoopingRef.current) {
         // Option A: Replay active track
-        playTilawatAudio(globalId);
+        playTilawatAudio(targetBox || globalId);
       } else if (autoNextRef.current) {
         const currentBoxes = mappedBoxesRef.current;
         const currentAyah = selectedAyahRef.current;
         
-        if (currentBoxes.length > 0 && currentAyah) {
-          const currentIndex = currentBoxes.findIndex(b => b.global_id === currentAyah.global_id);
-          
-          if (currentIndex !== -1 && currentIndex < currentBoxes.length - 1) {
-            // Option B: Play next track on page
-            const nextAyah = currentBoxes[currentIndex + 1];
-            setSelectedAyah(nextAyah);
-            playTilawatAudio(nextAyah.global_id);
-            fetchAyahInfo(nextAyah.global_id);
-          } else if (currentPageRef.current < 604) {
-            // Option C: Increment page and flag pending autoplay to turn cross-page
-            setCurrentPage(prev => prev + 1);
-            setPendingAutoPlay(true);
-          }
+        // Retrieve next DISTINCT Ayah box on current page
+        const nextAyah = getNextAyahBox(currentBoxes, currentAyah);
+        
+        if (nextAyah) {
+          // Option B: Play next distinct Ayah on current page
+          fetchAyahInfo(nextAyah.global_id);
+          playTilawatAudio(nextAyah);
+        } else if (currentPageRef.current < 604) {
+          // Option C: Last Ayah of page finished -> Advance page and autoplay Ayah 1 of next page
+          const nextPage = currentPageRef.current + 1;
+          changePageAndPlay(nextPage, true);
         }
       }
     };
@@ -219,9 +302,8 @@ export const TilawatTab = () => {
   };
 
   const handleBoxClick = (box) => {
-    setSelectedAyah(box);
-    playTilawatAudio(box.global_id);
     fetchAyahInfo(box.global_id);
+    playTilawatAudio(box);
   };
 
   const togglePlayback = () => {
@@ -235,7 +317,11 @@ export const TilawatTab = () => {
         }).catch(err => console.error("Playback play failed:", err));
       }
     } else if (selectedAyah) {
-      playTilawatAudio(selectedAyah.global_id);
+      playTilawatAudio(selectedAyah);
+    } else if (mappedBoxes.length > 0) {
+      const firstAyah = mappedBoxes[0];
+      fetchAyahInfo(firstAyah.global_id);
+      playTilawatAudio(firstAyah);
     }
   };
 
@@ -252,17 +338,24 @@ export const TilawatTab = () => {
 
   return (
     <div className="space-y-6 pb-12">
-      {/* Top Controls Bar - Fully Dark/Light Adaptive */}
+      {/* Top Controls Bar - Swapped RTL Page Controls & Responsive UI */}
       <div className="glass-panel dark:glass-panel light:bg-white light:border-slate-200 rounded-2xl p-5 border shadow-xl space-y-4 transition-colors duration-200">
         <div className="flex flex-wrap items-center justify-between gap-4">
-          {/* Navigation Jump Controls */}
+          {/* Navigation Jump Controls (RTL Swapped for Arabic Right-to-Left Reading) */}
           <div className="flex items-center gap-3">
+            {/* Left Button -> Advances to NEXT Page in Arabic RTL reading */}
             <button
-              onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-              disabled={currentPage <= 1}
-              className="p-2.5 rounded-xl bg-slate-900 dark:bg-slate-900 light:bg-slate-100 border border-slate-700 dark:border-slate-700 light:border-slate-200 text-slate-200 dark:text-slate-200 light:text-slate-700 hover:border-gold-500/50 hover:text-gold-300 disabled:opacity-40 transition-all shadow-sm"
+              onClick={() => {
+                const nextPage = Math.min(604, currentPage + 1);
+                changePageAndPlay(nextPage, isPlayingAudio);
+              }}
+              disabled={currentPage >= 604}
+              title="Next Page (الصفحة التالية - RTL)"
+              aria-label="Next Page"
+              className="p-2.5 rounded-xl bg-slate-900 dark:bg-slate-900 light:bg-slate-100 border border-slate-700 dark:border-slate-700 light:border-slate-200 text-slate-200 dark:text-slate-200 light:text-slate-700 hover:border-gold-500/50 hover:text-gold-300 disabled:opacity-40 transition-all shadow-sm flex items-center gap-1.5"
             >
               <ChevronLeft className="w-5 h-5" />
+              <span className="text-[11px] font-bold uppercase tracking-wider hidden sm:inline">Next</span>
             </button>
 
             <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900/90 dark:bg-slate-900/90 light:bg-slate-50 border border-gold-500/30 light:border-slate-200 shadow-inner">
@@ -274,18 +367,27 @@ export const TilawatTab = () => {
                 value={currentPage}
                 onChange={(e) => {
                   const val = parseInt(e.target.value, 10);
-                  if (val >= 1 && val <= 604) setCurrentPage(val);
+                  if (val >= 1 && val <= 604) {
+                    changePageAndPlay(val, isPlayingAudio);
+                  }
                 }}
                 className="w-16 bg-slate-950 dark:bg-slate-950 light:bg-white border border-slate-750 dark:border-slate-700 light:border-slate-200 rounded-lg px-2 py-1 text-center text-gold-300 dark:text-gold-300 light:text-slate-805 font-bold text-sm focus:outline-none focus:border-amber-500 transition-colors"
               />
               <span className="text-xs font-semibold text-slate-400 dark:text-slate-400 light:text-slate-500">/ 604</span>
             </div>
 
+            {/* Right Button -> Goes to PREVIOUS Page in Arabic RTL reading */}
             <button
-              onClick={() => setCurrentPage(prev => Math.min(604, prev + 1))}
-              disabled={currentPage >= 604}
-              className="p-2.5 rounded-xl bg-slate-900 dark:bg-slate-900 light:bg-slate-100 border border-slate-700 dark:border-slate-700 light:border-slate-200 text-slate-200 dark:text-slate-200 light:text-slate-700 hover:border-gold-500/50 hover:text-gold-300 disabled:opacity-40 transition-all shadow-sm"
+              onClick={() => {
+                const prevPage = Math.max(1, currentPage - 1);
+                changePageAndPlay(prevPage, isPlayingAudio);
+              }}
+              disabled={currentPage <= 1}
+              title="Previous Page (الصفحة السابقة - RTL)"
+              aria-label="Previous Page"
+              className="p-2.5 rounded-xl bg-slate-900 dark:bg-slate-900 light:bg-slate-100 border border-slate-700 dark:border-slate-700 light:border-slate-200 text-slate-200 dark:text-slate-200 light:text-slate-700 hover:border-gold-500/50 hover:text-gold-300 disabled:opacity-40 transition-all shadow-sm flex items-center gap-1.5"
             >
+              <span className="text-[11px] font-bold uppercase tracking-wider hidden sm:inline">Prev</span>
               <ChevronRight className="w-5 h-5" />
             </button>
           </div>
@@ -315,7 +417,7 @@ export const TilawatTab = () => {
             </div>
 
             {/* View Mode Toggle */}
-            <div className="flex items-center bg-slate-950 dark:bg-slate-950 light:bg-slate-100 p-1 rounded-xl border border-slate-850 dark:border-slate-800 light:border-slate-200 transition-colors">
+            <div className="flex items-center bg-slate-950 dark:bg-slate-950 light:bg-slate-100 p-1 rounded-xl border border-slate-855 dark:border-slate-800 light:border-slate-200 transition-colors">
               <button
                 onClick={() => setViewMode('manuscript')}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${viewMode === 'manuscript' ? 'bg-amber-500 text-slate-950 shadow-md font-bold' : 'text-slate-400 dark:text-slate-400 light:text-slate-600'}`}
@@ -336,35 +438,33 @@ export const TilawatTab = () => {
       {/* Main Manuscript Workspace */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left 2 Columns: Manuscript / Ayah Map */}
-        <div className="lg:col-span-2 glass-panel dark:glass-panel light:bg-white light:border-slate-200 rounded-2xl p-6 border flex flex-col items-center justify-center min-h-[600px] relative transition-colors duration-200">
+        <div className="lg:col-span-2 glass-panel dark:glass-panel light:bg-white light:border-slate-200 rounded-2xl p-6 border flex flex-col items-center justify-center min-h-[600px] relative transition-colors duration-200 overflow-hidden">
           {loadingBoxes || loadingJson ? (
             <div className="flex flex-col items-center justify-center gap-3 text-gold-400 py-20">
               <RefreshCw className="w-8 h-8 animate-spin" />
               <span className="text-sm font-semibold">Loading Page {currentPage}...</span>
             </div>
           ) : viewMode === 'manuscript' ? (
-            /* Crucially wrapping the image and boxes inside a relative inline-block container with zero padding/margins */
-            <div className="relative inline-block mx-auto max-w-xl border border-gold-500/30 dark:border-gold-500/30 light:border-slate-200 rounded-xl overflow-hidden bg-amber-50/5 shadow-2xl p-0 m-0">
-              {/* Manuscript image with relative z-0, block layout, max-width 100%, height auto, and no padding/margins */}
+            /* Manuscript View - Clean Key and Relative Container */
+            <div key={`manuscript-page-${currentPage}`} className="relative inline-block mx-auto max-w-xl border border-gold-500/30 dark:border-gold-500/30 light:border-slate-200 rounded-xl overflow-hidden bg-amber-50/5 shadow-2xl p-0 m-0 w-full">
               {manuscriptBase64 ? (
                 <img
                   src={getFormattedImageSrc(manuscriptBase64)}
                   alt={`Madani Quran Page ${currentPage}`}
                   onLoad={handleImageLoad}
-                  className="relative z-0 pointer-events-none block max-w-full h-auto p-0 m-0"
+                  className="relative z-0 pointer-events-none block max-w-full h-auto p-0 m-0 mx-auto"
                 />
               ) : (
-                <div className="flex flex-col items-center justify-center p-20 text-center space-y-4 min-h-[500px] w-[400px]">
+                <div className="flex flex-col items-center justify-center p-20 text-center space-y-4 min-h-[500px] w-full">
                   <BookOpen className="w-16 h-16 text-amber-500/40" />
                   <p className="text-xs text-slate-400">Manuscript Page {currentPage} not found in JSON data.</p>
                 </div>
               )}
 
-              {/* Bounding boxes strictly relative to the image natural dimensions, positioned absolute on top with z-10 */}
+              {/* Bounding boxes */}
               {manuscriptBase64 && mappedBoxes.map((box, idx) => {
                 const isSelected = selectedAyah?.global_id === box.global_id;
                 
-                // Calculate percentage relative to natural image dimensions to fix alignment shifts
                 const leftPct = (box.min_x / naturalDimensions.width) * 100;
                 const topPct = (box.min_y / naturalDimensions.height) * 100;
                 const widthPct = ((box.max_x - box.min_x) / naturalDimensions.width) * 100;
@@ -372,7 +472,7 @@ export const TilawatTab = () => {
 
                 return (
                   <button
-                    key={idx}
+                    key={`box-${box.global_id}-${idx}`}
                     onClick={() => handleBoxClick(box)}
                     title={`Surah ${box.sura}, Ayah ${box.ayah}`}
                     className={`absolute z-10 rounded transition-all cursor-pointer border ${
@@ -391,14 +491,14 @@ export const TilawatTab = () => {
               })}
             </div>
           ) : (
-            /* Ayah List View */
-            <div className="w-full space-y-3 max-h-[600px] overflow-y-auto pr-2">
+            /* Ayah List View - Clean Key and Unique Ayah List */
+            <div key={`ayah-list-page-${currentPage}`} className="w-full space-y-3 max-h-[600px] overflow-y-auto pr-2">
               <h3 className="text-sm font-bold text-gold-300 px-2 flex items-center gap-2">
-                <FileText className="w-4 h-4" /> Mapped Ayahs on Page {currentPage} ({mappedBoxes.length})
+                <FileText className="w-4 h-4" /> Mapped Ayahs on Page {currentPage} ({uniqueAyahList.length})
               </h3>
-              {mappedBoxes.map((box) => (
+              {uniqueAyahList.map((box) => (
                 <div
-                  key={box.global_id}
+                  key={`ayah-card-${box.global_id}`}
                   onClick={() => handleBoxClick(box)}
                   className={`p-4 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${selectedAyah?.global_id === box.global_id ? 'bg-amber-950/40 dark:bg-amber-950/40 light:bg-slate-50 border-amber-500/60 light:border-slate-200 shadow-gold-glow text-slate-100 dark:text-slate-100 light:text-slate-900' : 'bg-slate-900/60 dark:bg-slate-900/60 light:bg-white border-slate-800 dark:border-slate-800 light:border-slate-200 text-slate-300 dark:text-slate-300 light:text-slate-700 hover:bg-slate-900 hover:border-slate-700'}`}
                 >
@@ -409,7 +509,7 @@ export const TilawatTab = () => {
                       <span className="text-xs text-slate-400 dark:text-slate-400 light:text-slate-555">Ayah {box.ayah}</span>
                     </div>
                   </div>
-                  <button onClick={(e) => { e.stopPropagation(); playTilawatAudio(box.global_id); }} className="p-2 rounded-lg bg-amber-500 text-slate-950 font-bold hover:bg-amber-400 transition-colors shadow">
+                  <button onClick={(e) => { e.stopPropagation(); playTilawatAudio(box); }} className="p-2 rounded-lg bg-amber-500 text-slate-950 font-bold hover:bg-amber-400 transition-colors shadow">
                     <Play className="w-4 h-4 fill-slate-950" />
                   </button>
                 </div>
@@ -464,7 +564,7 @@ export const TilawatTab = () => {
                   <div className="text-xs font-bold text-slate-400 dark:text-slate-400 light:text-slate-555 uppercase tracking-wider">Audio Playback Controls</div>
                   
                   <div className="flex flex-wrap items-center gap-2">
-                    {/* Auto Next Toggle Pill */}
+                    {/* Continuous Reading Toggle Pill */}
                     <button
                       onClick={() => setAutoNext(!autoNext)}
                       className={`flex-1 py-2 px-3 rounded-lg border text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
@@ -472,10 +572,10 @@ export const TilawatTab = () => {
                           ? 'bg-amber-500/20 text-gold-300 border-amber-500/40 shadow-inner' 
                           : 'bg-slate-950/60 dark:bg-slate-950/60 light:bg-white text-slate-400 dark:text-slate-400 light:text-slate-500 border-slate-800 dark:border-slate-700 light:border-slate-200'
                       }`}
-                      title="Automatically play the next Ayah / Page when track ends"
+                      title="Automatically continue reading through next Ayahs & pages seamlessly when audio finishes"
                     >
                       <Activity className={`w-3.5 h-3.5 ${autoNext ? 'text-amber-400 animate-pulse' : 'text-slate-500'}`} />
-                      <span>Auto Next</span>
+                      <span>{autoNext ? "Continuous Reading ON" : "Continuous Reading OFF"}</span>
                     </button>
 
                     {/* Loop Toggle Pill */}
@@ -520,6 +620,14 @@ export const TilawatTab = () => {
               <div className="text-center py-10 text-slate-400 text-xs space-y-2">
                 <BookOpen className="w-8 h-8 mx-auto text-slate-600" />
                 <p className="dark:text-slate-400 light:text-slate-500">Click on any Ayah bounding box or list item to hear audio recitation and view metadata.</p>
+                <div className="pt-2">
+                  <button
+                    onClick={togglePlayback}
+                    className="py-2.5 px-4 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-gold-300 font-bold text-xs border border-amber-500/30 transition-all inline-flex items-center gap-2"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-gold-300" /> Start Continuous Reading
+                  </button>
+                </div>
               </div>
             )}
           </div>
