@@ -89,20 +89,20 @@ export const Login = ({ onLoginSuccess }) => {
           </div>
           <div>
             <h1 className="text-xl font-extrabold tracking-wide gold-gradient-text">
-              {isRegistering ? 'Register Student Profile' : 'Academic Quran Portal'}
+              {isRegistering ? 'Register Talabat Profile' : 'Academic Quran Portal'}
             </h1>
             <span className="text-[10px] font-bold text-slate-400 tracking-wider uppercase">
-              {isRegistering ? 'Create new credentials' : 'University Recitation & Testing Suite'}
+              {isRegistering ? 'Create new credentials' : 'Academic Recitation & Testing Suite'}
             </span>
           </div>
         </div>
 
         {/* Input Form */}
         <form onSubmit={handleSubmit} className="space-y-5">
-          {/* ID Input */}
+          {/* TR no Input */}
           <div className="space-y-1.5">
             <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider">
-              Student ID Number (5 digits)
+              Talabat TR no. (5 digits)
             </label>
             <div className="relative">
               <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-500">
@@ -114,7 +114,7 @@ export const Login = ({ onLoginSuccess }) => {
                 maxLength={5}
                 value={username}
                 onChange={(e) => setUsername(e.target.value.replace(/\D/g, ''))}
-                placeholder="Enter 5-digit ID (e.g. 27234)"
+                placeholder="Enter 5-digit TR no. (e.g. 27234)"
                 className="w-full bg-slate-900/90 text-slate-100 text-sm rounded-xl pl-10 pr-4 py-3 border border-slate-700/80 focus:outline-none focus:border-amber-500 transition-all font-mono tracking-widest font-semibold"
               />
             </div>

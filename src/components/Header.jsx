@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, Mic, Award, Sparkles, Clock, Globe, Sun, Moon, LogOut } from 'lucide-react';
+import { BookOpen, Mic, Award, Activity, Sparkles, Clock, Globe, Sun, Moon, LogOut } from 'lucide-react';
 
 export const Header = ({ activeTab, user, theme, toggleTheme, handleLogout }) => {
   const getTabTitle = () => {
@@ -10,6 +10,8 @@ export const Header = ({ activeTab, user, theme, toggleTheme, handleLogout }) =>
         return { title: 'Tasmee Recitation Engine', subtitle: 'Batch-Processed Audio Memorization & AI Evaluation', icon: Mic };
       case 'ikhtebaar':
         return { title: 'Ikhtebaar Testing Suite', subtitle: 'Academic Oral Examination with Progressive Hints', icon: Award };
+      case 'analytics':
+        return { title: 'Talabat Analytics & Progress', subtitle: '30-Juz Heatmap, Mutashabihat Queue & Audit Logs', icon: Activity };
       default:
         return { title: 'Academic Quran Portal', subtitle: 'Enterprise Dashboard', icon: Sparkles };
     }
@@ -51,7 +53,7 @@ export const Header = ({ activeTab, user, theme, toggleTheme, handleLogout }) =>
           <div className="w-px h-4 bg-slate-300 dark:bg-slate-800" />
           <div className="flex items-center gap-1.5 text-gold-600 dark:text-gold-400 font-mono">
             <Clock className="w-3.5 h-3.5" />
-            <span>Batch Engine</span>
+            <span>Recitation Engine</span>
           </div>
         </div>
 
@@ -65,7 +67,7 @@ export const Header = ({ activeTab, user, theme, toggleTheme, handleLogout }) =>
               {user.name}
             </span>
             <span className="text-[10px] font-mono text-gold-600 dark:text-gold-400 mt-0.5">
-              ID: {user.id}
+              TR no.: {user.id}
             </span>
           </div>
         </div>
@@ -83,7 +85,7 @@ export const Header = ({ activeTab, user, theme, toggleTheme, handleLogout }) =>
         <button
           onClick={handleLogout}
           className="p-2.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-500 hover:text-red-600 transition-colors shadow-sm"
-          title="Sign out of Student Session"
+          title="Sign out of Session"
         >
           <LogOut className="w-4 h-4" />
         </button>

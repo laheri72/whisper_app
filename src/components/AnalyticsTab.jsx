@@ -54,7 +54,7 @@ export const AnalyticsTab = () => {
     return (
       <div className="flex flex-col items-center justify-center min-h-[400px] space-y-4">
         <RefreshCw className="w-8 h-8 animate-spin text-gold-400" />
-        <p className="text-sm font-semibold text-slate-400">Loading Student Performance Matrix...</p>
+        <p className="text-sm font-semibold text-slate-400">Loading Talabat Performance Matrix...</p>
       </div>
     );
   }
@@ -86,7 +86,7 @@ export const AnalyticsTab = () => {
 
   return (
     <div className="space-y-6 pb-12">
-      {/* 1. Header Student Performance Dashboard Card */}
+      {/* 1. Header Talabat Performance Dashboard Card */}
       <div className="glass-panel-gold rounded-2xl p-6 border border-gold-500/30 shadow-xl space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-6 border-b border-slate-800 pb-5">
           <div className="flex items-center gap-4">
@@ -95,7 +95,7 @@ export const AnalyticsTab = () => {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-xl font-extrabold text-slate-100">Student ID: {username}</h2>
+                <h2 className="text-xl font-extrabold text-slate-100">TR no.: {username}</h2>
                 <span className="px-3 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
                   {mastery_level}
                 </span>

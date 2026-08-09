@@ -156,7 +156,7 @@ export const TasmeeTab = () => {
       setIsFinalizingStream(false);
       setIsAnalyzing(true);
       setAnalysisProgress(10);
-      setAnalysisStage("Decoding 16kHz PCM Audio Stream...");
+      setAnalysisStage("Analyzing Audio Recitation...");
 
       // Stop recorder and encode standard 16kHz PCM WAV Audio Blob
       const audioBlob = await recorderRef.current.stopRecording();
@@ -171,11 +171,11 @@ export const TasmeeTab = () => {
         setAnalysisProgress(currentProg);
 
         if (currentProg < 35) {
-          setAnalysisStage("Decoding 16kHz PCM Audio Stream...");
+          setAnalysisStage("Analyzing Audio Recitation...");
         } else if (currentProg < 75) {
-          setAnalysisStage("Whisper AI Model Neural Inference (tarteel-ai)...");
+          setAnalysisStage("Academic Neural Evaluation...");
         } else if (currentProg < 92) {
-          setAnalysisStage("Arabic Phoneme Normalization & Diff Alignment...");
+          setAnalysisStage("Verse Alignment & Assessment...");
         }
       }, 300);
 
@@ -549,7 +549,7 @@ export const TasmeeTab = () => {
 
                 <div className="text-[11px] text-slate-400 font-medium flex items-center justify-between">
                   <span className="animate-pulse text-slate-300 font-semibold">{analysisStage}</span>
-                  <span className="text-amber-400/80 font-mono text-[10px]">Whisper AI</span>
+                  <span className="text-amber-400/80 font-mono text-[10px]">Academic Engine</span>
                 </div>
               </div>
             ) : !isRecording ? (
@@ -574,7 +574,7 @@ export const TasmeeTab = () => {
         </div>
       </div>
 
-      {/* 3. AI Evaluation & Grade Report Card */}
+      {/* 3. Academic Evaluation & Grade Report Card */}
       {evaluationResult && (
         <div className="glass-panel-gold rounded-2xl p-6 border border-gold-500/40 shadow-2xl space-y-6 animate-fadeIn">
           {/* Grade Summary Header */}
@@ -593,7 +593,7 @@ export const TasmeeTab = () => {
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 mt-1">
-                  Batch audio transcribed and verified against Uthmani text standard.
+                  Audio recitation transcribed and verified against Uthmani text standard.
                 </p>
               </div>
             </div>
@@ -615,10 +615,10 @@ export const TasmeeTab = () => {
             </div>
           </div>
 
-          {/* Whisper STT Speech Output Banner */}
+          {/* Recognized Speech Output Banner */}
           {evaluationResult.user_transcription && (
             <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Whisper AI Recognized Speech Output:</span>
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Recognized Recitation Output:</span>
               <p dir="rtl" className="font-arabic text-lg text-amber-200 text-right">{evaluationResult.user_transcription}</p>
             </div>
           )}

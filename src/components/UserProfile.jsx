@@ -8,7 +8,7 @@ export const UserProfile = ({
     initials: "MS", 
     badge: "Registered User", 
     department: "Quranic Sciences & Recitation",
-    status: "Active Student"
+    status: "Active Talib"
   },
   compact = false 
 }) => {
@@ -24,7 +24,7 @@ export const UserProfile = ({
             <span className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">{user.name}</span>
           </div>
           <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-            <span className="font-mono text-gold-600 dark:text-gold-400">ID: {user.id}</span>
+            <span className="font-mono text-gold-600 dark:text-gold-400">TR no.: {user.id}</span>
             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/10 text-amber-600 dark:text-amber-300 border border-amber-500/30">
               {user.badge}
             </span>
@@ -60,7 +60,7 @@ export const UserProfile = ({
 
           <div className="flex items-center gap-2 mt-1">
             <span className="font-mono text-xs text-slate-700 dark:text-slate-300 bg-slate-200/60 dark:bg-slate-900/80 px-2 py-0.5 rounded-md border border-slate-300/40 dark:border-slate-700/60">
-              ID: <strong className="text-gold-600 dark:text-gold-400">{user.id}</strong>
+              TR no.: <strong className="text-gold-600 dark:text-gold-400">{user.id}</strong>
             </span>
           </div>
 
