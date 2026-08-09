@@ -41,6 +41,21 @@ def normalize_arabic(text: str) -> str:
     text = re.sub(r'ـ', '', text)
     return text.strip()
 
+def resample_to_16k(float_data: np.ndarray, orig_sr: int) -> np.ndarray:
+    """Resamples Float32 audio array from original sample rate to 16000Hz using pure NumPy linear interpolation."""
+    if orig_sr == 16000 or float_data is None or len(float_data) == 0:
+        return float_data
+    try:
+        target_sr = 16000
+        num_output_samples = int(round(len(float_data) * target_sr / orig_sr))
+        input_indices = np.linspace(0, len(float_data) - 1, num_output_samples)
+        resampled = np.interp(input_indices, np.arange(len(float_data)), float_data).astype(np.float32)
+        logger.info(f"Successfully resampled audio array from {orig_sr}Hz -> {target_sr}Hz (Original: {len(float_data)} samples -> Resampled: {len(resampled)} samples)")
+        return resampled
+    except Exception as e:
+        logger.error(f"Resampling error ({orig_sr}Hz -> 16000Hz): {e}")
+        return float_data
+
 def decode_audio_bytes_to_numpy(audio_bytes: bytes):
     """
     Parses WAV or WebM audio bytes into a 16kHz float32 NumPy array 
@@ -49,11 +64,14 @@ def decode_audio_bytes_to_numpy(audio_bytes: bytes):
     if not audio_bytes or len(audio_bytes) < 44:
         return None, None
 
+    float_data = None
+    sr = None
+
     # 1. Try parsing PCM WAV using scipy.io.wavfile
     try:
         import scipy.io.wavfile as wavfile
         bytes_io = io.BytesIO(audio_bytes)
-        sr, data = wavfile.read(bytes_io)
+        sr_read, data = wavfile.read(bytes_io)
         if data.ndim > 1:
             data = data.mean(axis=1)
         if data.dtype == np.int16:
@@ -64,42 +82,52 @@ def decode_audio_bytes_to_numpy(audio_bytes: bytes):
             float_data = (data.astype(np.float32) - 128.0) / 128.0
         else:
             float_data = data.astype(np.float32)
-        return float_data, sr
+        sr = sr_read
     except Exception as e:
         logger.debug(f"scipy wavfile read attempt failed: {e}")
 
     # 2. Try soundfile
-    try:
-        import soundfile as sf
-        bytes_io = io.BytesIO(audio_bytes)
-        data, sr = sf.read(bytes_io)
-        if data.ndim > 1:
-            data = data.mean(axis=1)
-        return data.astype(np.float32), sr
-    except Exception as e:
-        logger.debug(f"soundfile read attempt failed: {e}")
+    if float_data is None:
+        try:
+            import soundfile as sf
+            bytes_io = io.BytesIO(audio_bytes)
+            data, sr_read = sf.read(bytes_io)
+            if data.ndim > 1:
+                data = data.mean(axis=1)
+            float_data = data.astype(np.float32)
+            sr = sr_read
+        except Exception as e:
+            logger.debug(f"soundfile read attempt failed: {e}")
 
-    # 3. Try pydub / wave module
-    try:
-        import wave
-        bytes_io = io.BytesIO(audio_bytes)
-        with wave.open(bytes_io, 'rb') as wf:
-            sr = wf.getframerate()
-            n_frames = wf.getnframes()
-            frames = wf.readframes(n_frames)
-            data = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
-            if wf.getnchannels() > 1:
-                data = data.reshape(-1, wf.getnchannels()).mean(axis=1)
-            return data, sr
-    except Exception as e:
-        logger.debug(f"wave module read attempt failed: {e}")
+    # 3. Try wave module
+    if float_data is None:
+        try:
+            import wave
+            bytes_io = io.BytesIO(audio_bytes)
+            with wave.open(bytes_io, 'rb') as wf:
+                sr_read = wf.getframerate()
+                n_frames = wf.getnframes()
+                frames = wf.readframes(n_frames)
+                data = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+                if wf.getnchannels() > 1:
+                    data = data.reshape(-1, wf.getnchannels()).mean(axis=1)
+                float_data = data
+                sr = sr_read
+        except Exception as e:
+            logger.debug(f"wave module read attempt failed: {e}")
+
+    if float_data is not None and sr is not None:
+        if sr != 16000:
+            float_data = resample_to_16k(float_data, sr)
+            sr = 16000
+        return float_data, sr
 
     return None, None
 
 async def transcribe_audio_file(audio_bytes: bytes, expected_text: str = "") -> str:
     """
     Transcribes audio bytes strictly using the loaded Whisper AI model.
-    Passes raw audio array directly to bypass ffmpeg dependency issues.
+    Passes raw 16kHz PCM audio array directly to bypass ffmpeg dependency issues.
     """
     global pipe, MODEL_LOADED
     
@@ -108,27 +136,22 @@ async def transcribe_audio_file(audio_bytes: bytes, expected_text: str = "") -> 
         return ""
 
     try:
+        if not audio_bytes or len(audio_bytes) < 44:
+            logger.info("Audio bytes empty or too small.")
+            return ""
+
         # Decode audio bytes into float32 array
         audio_array, sampling_rate = decode_audio_bytes_to_numpy(audio_bytes)
         
         if audio_array is not None and len(audio_array) > 0:
             logger.info(f"Running ffmpeg-free Whisper pipeline on {len(audio_array)} samples at {sampling_rate}Hz...")
-            result = pipe({"array": audio_array, "sampling_rate": sampling_rate})
+            result = pipe({"array": audio_array, "sampling_rate": sampling_rate or 16000})
+            transcription = result.get("text", "").strip() if isinstance(result, dict) else str(result).strip()
+            logger.info(f"Whisper STT Output: '{transcription}'")
+            return transcription
         else:
-            # Fallback to temp file if numpy parsing fails
-            import tempfile
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
-                temp_audio.write(audio_bytes)
-                temp_filepath = temp_audio.name
-            try:
-                result = pipe(temp_filepath)
-            finally:
-                if os.path.exists(temp_filepath):
-                    os.remove(temp_filepath)
-
-        transcription = result.get("text", "").strip() if isinstance(result, dict) else str(result).strip()
-        logger.info(f"Whisper STT Output: '{transcription}'")
-        return transcription
+            logger.warning("Could not decode audio bytes to numpy array (empty or unsupported header).")
+            return ""
     except Exception as e:
         logger.error(f"Whisper inference error: {e}", exc_info=True)
         return ""

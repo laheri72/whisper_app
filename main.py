@@ -3,14 +3,24 @@ import os
 import json
 import base64
 import random
+import difflib
+import re
+import asyncio
 from fastapi import FastAPI, Request, Form, UploadFile, File, Response, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
+from app.ai_service import init_whisper_model, transcribe_audio_file, compare_recitation, normalize_arabic
 
 app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key="super_secret_academic_key")
+
+@app.on_event("startup")
+async def startup_event():
+    # Pre-load Hugging Face Whisper AI model in background thread on server boot
+    print("🚀 Initializing Whisper AI Model (tarteel-ai/whisper-base-ar-quran)...")
+    asyncio.create_task(asyncio.to_thread(init_whisper_model))
 
 # DIRECTORY MOUNTS
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -266,8 +276,12 @@ async def get_ayah_info(global_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def to_arabic_digits(num: int) -> str:
+    arabic_digits = "٠١٢٣٤٥٦٧٨٩"
+    return "".join(arabic_digits[int(d)] for d in str(num))
+
 # ==========================================
-# 3. TASMEE ROUTES (UPDATED WITH RANGE)
+# 3. TASMEE ROUTES (PAGINATED RANGE SUPPORT)
 # ==========================================
 @app.get("/api/tasmee_target")
 async def get_tasmee_target(mode: str, start_val: int, end_val: int):
@@ -285,38 +299,75 @@ async def get_tasmee_target(mode: str, start_val: int, end_val: int):
                 break
         
         expected_text = ""
+        pages_list = []
         
         if mode == "page":
             conn_map = sqlite3.connect("file1.db")
             cursor_map = conn_map.cursor()
             cursor_map.execute("""
-                SELECT DISTINCT sura_number, ayah_number 
+                SELECT page_number, sura_number, ayah_number 
                 FROM glyphs_publication_1 
                 WHERE page_number BETWEEN ? AND ?
-                ORDER BY sura_number, ayah_number
+                GROUP BY page_number, sura_number, ayah_number
+                ORDER BY page_number, sura_number, ayah_number
             """, (start_val, end_val))
-            ayahs = cursor_map.fetchall()
+            rows = cursor_map.fetchall()
             conn_map.close()
             
-            texts = []
-            for a in ayahs:
-                cursor_text.execute(f"SELECT {text_col} FROM quran_text WHERE surah_number = ? AND ayah_number = ?", (a[0], a[1]))
-                row = cursor_text.fetchone()
-                if row and row[0]:
-                    texts.append(row[0])
-            expected_text = " ".join(texts)
+            pages_dict = {}
+            all_texts = []
+            for r in rows:
+                p_num, sura, ayah = r[0], r[1], r[2]
+                cursor_text.execute(f"SELECT {text_col} FROM quran_text WHERE surah_number = ? AND ayah_number = ?", (sura, ayah))
+                t_row = cursor_text.fetchone()
+                if t_row and t_row[0]:
+                    txt = t_row[0]
+                    all_texts.append(txt)
+                    formatted_txt = f"{txt} ﴿{to_arabic_digits(ayah)}﴾"
+                    if p_num not in pages_dict:
+                        pages_dict[p_num] = []
+                    pages_dict[p_num].append(formatted_txt)
+                    
+            expected_text = " ".join(all_texts)
+            pages_list = [
+                {"page_number": p, "label": f"Page {p}", "text": " ".join(txts)}
+                for p, txts in sorted(pages_dict.items())
+            ]
             
         elif mode == "surah":
-            cursor_text.execute(f"SELECT {text_col} FROM quran_text WHERE surah_number BETWEEN ? AND ? ORDER BY surah_number, ayah_number", (start_val, end_val))
+            cursor_text.execute(f"SELECT surah_number, ayah_number, {text_col} FROM quran_text WHERE surah_number BETWEEN ? AND ? ORDER BY surah_number, ayah_number", (start_val, end_val))
             rows = cursor_text.fetchall()
-            expected_text = " ".join([r[0] for r in rows if r[0]])
+            
+            surah_dict = {}
+            all_texts = []
+            for r in rows:
+                s_num, a_num, txt = r[0], r[1], r[2]
+                if txt:
+                    all_texts.append(txt)
+                    formatted_txt = f"{txt} ﴿{to_arabic_digits(a_num)}﴾"
+                    if s_num not in surah_dict:
+                        surah_dict[s_num] = []
+                    surah_dict[s_num].append(formatted_txt)
+                    
+            expected_text = " ".join(all_texts)
+            pages_list = [
+                {
+                    "page_number": s, 
+                    "label": f"Surah {SURAH_NAMES[s] if 1 <= s < len(SURAH_NAMES) else s}", 
+                    "text": " ".join(txts)
+                } 
+                for s, txts in sorted(surah_dict.items())
+            ]
                 
         conn_text.close()
         
         if not expected_text:
             return {"error": "No text found for this selection in the database."}
             
-        return {"expected_text": expected_text}
+        return {
+            "expected_text": expected_text,
+            "pages": pages_list
+        }
         
     except Exception as e:
         print(f"Database Error: {e}")
@@ -324,10 +375,18 @@ async def get_tasmee_target(mode: str, start_val: int, end_val: int):
 
 @app.post("/api/tasmee_chunk_process")
 async def process_tasmee_chunk(file: UploadFile = File(...), expected_word: str = Form(...)):
-    """ REAL-TIME EVALUATION ENDPOINT for Tasmee """
-    # INSERT YOUR WHISPER AI LOGIC HERE
-    simulated_status = "match" if random.random() > 0.2 else "mistake"
-    return {"status": simulated_status}
+    """ REAL-TIME EVALUATION ENDPOINT for Tasmee using Whisper STT """
+    try:
+        audio_bytes = await file.read()
+        transcription = await transcribe_audio_file(audio_bytes, expected_word)
+        norm_user = normalize_arabic(transcription)
+        norm_expected = normalize_arabic(expected_word)
+        
+        status = "match" if (norm_user and (norm_user in norm_expected or norm_expected in norm_user)) else "mistake"
+        return {"status": status, "transcription": transcription}
+    except Exception as e:
+        print(f"Tasmee chunk evaluation error: {e}")
+        return {"status": "mistake", "transcription": ""}
 
 
 # ==========================================
@@ -447,14 +506,68 @@ async def generate_ikhtebaar(mode: str, start_val: int, end_val: int, difficulty
 
 @app.post("/transcribe_and_compare")
 async def transcribe_and_compare(file: UploadFile = File(...), expected_text: str = Form(...)):
-    """ Final Grading Endpoint for Ikhtebaar """
-    # Mocking Whisper AI final grading for now
-    words = expected_text.split()
-    comparison = [{"word": w, "status": "match" if random.random() > 0.1 else "mistake"} for w in words]
-    score = int((sum(1 for i in comparison if i["status"] == "match") / len(comparison)) * 100) if comparison else 0
-    
-    return {
-        "transcription": expected_text,
-        "comparison": comparison,
-        "score": score
-    }
+    """ Final Grading Endpoint for Tasmee & Ikhtebaar using Genuine Whisper AI STT """
+    try:
+        audio_bytes = await file.read()
+        
+        # Genuine Whisper AI Speech-to-Text Transcription
+        user_transcription = await transcribe_audio_file(audio_bytes, expected_text)
+        
+        orig_words = expected_text.split()
+        display_words = []
+        norm_words = []
+        for w in orig_words:
+            cleaned = re.sub(r'[\uFD3E\uFD3F0-9\u0660-\u0669\s]+', '', w).strip()
+            norm = normalize_arabic(cleaned)
+            if norm:
+                display_words.append(w)
+                norm_words.append(norm)
+
+        norm_user_words = normalize_arabic(user_transcription).split()
+
+        # Handle Silence / No Speech Spoken
+        if not norm_user_words or not norm_words:
+            comparison = [{"word": w, "status": "mistake"} for w in display_words]
+            return {
+                "score": 0,
+                "user_transcription": user_transcription or "(Silence / No speech detected)",
+                "transcription": user_transcription or "",
+                "comparison": comparison,
+                "matches": 0,
+                "mistakes": len(display_words),
+                "total": len(display_words)
+            }
+
+        # Sequence Diff Matcher against Normalized Arabic Ground Truth
+        matcher = difflib.SequenceMatcher(None, norm_words, norm_user_words)
+        status_map = {}
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == 'equal':
+                for i in range(i1, i2):
+                    status_map[i] = 'match'
+            else:
+                for i in range(i1, i2):
+                    status_map[i] = 'mistake'
+
+        comparison = []
+        match_count = 0
+        for idx, w in enumerate(display_words):
+            st = status_map.get(idx, 'mistake')
+            if st == 'match':
+                match_count += 1
+            comparison.append({"word": w, "status": st})
+
+        score = int(round((match_count / len(display_words)) * 100)) if display_words else 0
+
+        return {
+            "score": score,
+            "user_transcription": user_transcription,
+            "transcription": user_transcription,
+            "comparison": comparison,
+            "matches": match_count,
+            "mistakes": len(display_words) - match_count,
+            "total": len(display_words)
+        }
+    except Exception as e:
+        print(f"Recitation evaluation error: {e}")
+        return {"error": f"Failed to grade recitation: {str(e)}"}

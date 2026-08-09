@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff, Play, CheckCircle2, AlertCircle, Eye, EyeOff, Layers, RefreshCw, Award, FileText, Sparkles } from 'lucide-react';
+import { Mic, MicOff, Play, CheckCircle2, AlertCircle, Eye, EyeOff, Layers, RefreshCw, Award, FileText, Sparkles, ChevronLeft, ChevronRight } from 'lucide-react';
 import { getJuzPageRange, JUZ_LIST, SURAH_LIST } from '../utils/juzMapping';
 import { BatchAudioRecorder } from '../utils/audioRecorder';
 import { AudioVisualizer } from './AudioVisualizer';
@@ -15,13 +15,19 @@ export const TasmeeTab = () => {
 
   // Target Text & State
   const [expectedText, setExpectedText] = useState('');
+  const [paginatedPages, setPaginatedPages] = useState([]);
+  const [activePageIndex, setActivePageIndex] = useState(0);
   const [loadingText, setLoadingText] = useState(false);
   const [hideTargetText, setHideTargetText] = useState(false);
   const [textError, setTextError] = useState('');
 
-  // Batch Audio Recording States
+  // Batch Audio Recording & AI Evaluation States
+  const [isStartingRecording, setIsStartingRecording] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [isFinalizingStream, setIsFinalizingStream] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
+  const [analysisStage, setAnalysisStage] = useState('');
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [analyserNode, setAnalyserNode] = useState(null);
 
@@ -30,6 +36,7 @@ export const TasmeeTab = () => {
 
   const recorderRef = useRef(null);
   const timerIntervalRef = useRef(null);
+  const textContainerRef = useRef(null);
 
   // Whenever Juz selection changes, apply exact math formula
   useEffect(() => {
@@ -48,11 +55,19 @@ export const TasmeeTab = () => {
     };
   }, []);
 
+  // Reset scroll to top whenever page index or text changes
+  useEffect(() => {
+    if (textContainerRef.current) {
+      textContainerRef.current.scrollTop = 0;
+    }
+  }, [activePageIndex, expectedText]);
+
   // Fetch Reference Target Text from backend /api/tasmee_target
   const fetchTasmeeTarget = async () => {
     setLoadingText(true);
     setTextError('');
     setEvaluationResult(null);
+    setActivePageIndex(0);
 
     let modeParam = 'page';
     let startVal = fromPage;
@@ -80,8 +95,10 @@ export const TasmeeTab = () => {
       if (data.error) {
         setTextError(data.error);
         setExpectedText('');
+        setPaginatedPages([]);
       } else {
         setExpectedText(data.expected_text || '');
+        setPaginatedPages(data.pages || []);
       }
     } catch (err) {
       console.error("Tasmee target fetch error:", err);
@@ -99,6 +116,7 @@ export const TasmeeTab = () => {
     }
 
     try {
+      setIsStartingRecording(true);
       const recorder = new BatchAudioRecorder();
       recorderRef.current = recorder;
 
@@ -114,6 +132,8 @@ export const TasmeeTab = () => {
       }, 1000);
     } catch (err) {
       alert(err.message || "Failed to start microphone recording.");
+    } finally {
+      setIsStartingRecording(false);
     }
   };
 
@@ -127,10 +147,37 @@ export const TasmeeTab = () => {
 
     try {
       setIsRecording(false);
-      setIsAnalyzing(true);
+      setIsFinalizingStream(true);
+      setAnalysisStage("Flushing audio stream buffer...");
 
-      // Stop recorder and get single batch Audio Blob
+      // 450ms audio tail buffer delay to ensure final spoken words are captured into PCM stream
+      await new Promise(r => setTimeout(r, 450));
+
+      setIsFinalizingStream(false);
+      setIsAnalyzing(true);
+      setAnalysisProgress(10);
+      setAnalysisStage("Decoding 16kHz PCM Audio Stream...");
+
+      // Stop recorder and encode standard 16kHz PCM WAV Audio Blob
       const audioBlob = await recorderRef.current.stopRecording();
+
+      // Start progress bar animation for AI evaluation pipeline
+      let currentProg = 15;
+      const progressInterval = setInterval(() => {
+        currentProg += Math.floor(Math.random() * 8) + 5;
+        if (currentProg >= 92) {
+          currentProg = 92; // Hold at 92% until response returns
+        }
+        setAnalysisProgress(currentProg);
+
+        if (currentProg < 35) {
+          setAnalysisStage("Decoding 16kHz PCM Audio Stream...");
+        } else if (currentProg < 75) {
+          setAnalysisStage("Whisper AI Model Neural Inference (tarteel-ai)...");
+        } else if (currentProg < 92) {
+          setAnalysisStage("Arabic Phoneme Normalization & Diff Alignment...");
+        }
+      }, 300);
 
       // Construct FormData payload for /transcribe_and_compare
       const formData = new FormData();
@@ -143,18 +190,29 @@ export const TasmeeTab = () => {
         body: formData,
       });
 
+      clearInterval(progressInterval);
+
       if (!response.ok) {
         throw new Error(`Server returned HTTP status ${response.status}`);
       }
 
       const resultData = await response.json();
+
+      setAnalysisProgress(100);
+      setAnalysisStage("Recitation Assessment Complete!");
+
+      // Brief 300ms pause to show 100% completion bar before displaying results
+      await new Promise(r => setTimeout(r, 300));
       setEvaluationResult(resultData);
     } catch (err) {
       console.error("Recitation evaluation error:", err);
       alert("Failed to grade recitation: " + err.message);
     } finally {
       setIsAnalyzing(false);
+      setIsFinalizingStream(false);
       setAnalyserNode(null);
+      setAnalysisProgress(0);
+      setAnalysisStage('');
     }
   };
 
@@ -168,6 +226,8 @@ export const TasmeeTab = () => {
   const matchCount = evaluationResult?.comparison?.filter(c => c.status === 'match').length || 0;
   const mistakeCount = evaluationResult?.comparison?.filter(c => c.status === 'mistake').length || 0;
   const totalWords = evaluationResult?.comparison?.length || 0;
+
+  const currentDisplayPage = paginatedPages.length > 0 ? paginatedPages[activePageIndex] : null;
 
   return (
     <div className="space-y-6 pb-12">
@@ -312,74 +372,141 @@ export const TasmeeTab = () => {
       </div>
 
       {/* 2. Target Text & Audio Recording Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         {/* Left Card: Reference Text Container */}
-        <div className="glass-panel rounded-2xl p-6 border border-gold-500/20 shadow-xl flex flex-col justify-between space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div className="glass-panel rounded-2xl p-6 border border-gold-500/20 shadow-xl space-y-4 transition-all duration-300">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
             <h3 className="font-bold text-slate-100 text-sm flex items-center gap-2">
-              <FileText className="w-4 h-4 text-gold-400" /> Target Quran Text for Recitation
+              <FileText className="w-4 h-4 text-gold-400" /> Target Quran Text
             </h3>
-            {expectedText && (
-              <button
-                onClick={() => setHideTargetText(!hideTargetText)}
-                className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-slate-900 text-xs font-semibold text-slate-300 border border-slate-700 hover:border-gold-500/40 transition-all"
-              >
-                {hideTargetText ? (
-                  <>
-                    <Eye className="w-3.5 h-3.5 text-amber-400" /> Reveal Text
-                  </>
-                ) : (
-                  <>
-                    <EyeOff className="w-3.5 h-3.5 text-slate-400" /> Hide (Memory Test)
-                  </>
-                )}
-              </button>
-            )}
+
+            <div className="flex items-center gap-2">
+              {/* Paginated Page Navigator */}
+              {paginatedPages.length > 1 && !hideTargetText && (
+                <div className="flex items-center gap-1 bg-slate-900 px-2 py-1 rounded-lg border border-slate-800 text-xs">
+                  <button
+                    onClick={() => setActivePageIndex(prev => Math.max(0, prev - 1))}
+                    disabled={activePageIndex <= 0}
+                    className="p-1 hover:text-gold-300 disabled:opacity-30 transition-all"
+                    title="Previous Reference Page"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                  </button>
+
+                  <select
+                    value={activePageIndex}
+                    onChange={(e) => setActivePageIndex(parseInt(e.target.value, 10))}
+                    className="bg-transparent text-amber-300 font-bold text-xs focus:outline-none px-1"
+                  >
+                    {paginatedPages.map((pg, idx) => (
+                      <option key={idx} value={idx} className="bg-slate-950 text-slate-200">
+                        {pg.label || `Page ${idx + 1}`} ({idx + 1}/{paginatedPages.length})
+                      </option>
+                    ))}
+                  </select>
+
+                  <button
+                    onClick={() => setActivePageIndex(prev => Math.min(paginatedPages.length - 1, prev + 1))}
+                    disabled={activePageIndex >= paginatedPages.length - 1}
+                    className="p-1 hover:text-gold-300 disabled:opacity-30 transition-all"
+                    title="Next Reference Page"
+                  >
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
+              {expectedText && (
+                <button
+                  onClick={() => setHideTargetText(!hideTargetText)}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-slate-900 text-xs font-semibold text-slate-300 border border-slate-700 hover:border-gold-500/40 transition-all"
+                >
+                  {hideTargetText ? (
+                    <>
+                      <Eye className="w-3.5 h-3.5 text-amber-400" /> Reveal Text
+                    </>
+                  ) : (
+                    <>
+                      <EyeOff className="w-3.5 h-3.5 text-slate-400" /> Hide (Memory Test)
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
           </div>
 
-          <div className="flex-1 min-h-[220px] flex items-center justify-center p-4 rounded-xl bg-slate-950/80 border border-slate-800">
+          {/* Reference Text Display / Memory Test Shrunk Container */}
+          <div
+            ref={textContainerRef}
+            className={`transition-all duration-300 rounded-xl bg-slate-950/80 border border-slate-800 p-4 ${
+              hideTargetText ? 'h-[85px] flex items-center justify-between border-amber-500/40 bg-amber-950/20' : 'h-[280px] overflow-y-auto block'
+            }`}
+          >
             {loadingText ? (
-              <div className="flex items-center gap-2 text-gold-400 text-xs font-semibold">
+              <div className="flex items-center justify-center h-full gap-2 text-gold-400 text-xs font-semibold">
                 <RefreshCw className="w-4 h-4 animate-spin" /> Fetching target text from database...
               </div>
             ) : textError ? (
-              <div className="text-center text-red-400 text-xs font-semibold space-y-1">
+              <div className="flex flex-col items-center justify-center h-full text-center text-red-400 text-xs font-semibold space-y-1">
                 <AlertCircle className="w-6 h-6 mx-auto" />
                 <p>{textError}</p>
               </div>
+            ) : hideTargetText ? (
+              /* Sleek Shrunk Memory Test Badge */
+              <div className="flex items-center justify-between w-full px-2 text-xs">
+                <div className="flex items-center gap-2 text-amber-300 font-semibold">
+                  <EyeOff className="w-4 h-4 text-amber-400" />
+                  <span>Reference Text Hidden — Reciting from Memory</span>
+                </div>
+                <button
+                  onClick={() => setHideTargetText(false)}
+                  className="px-3 py-1 rounded-md bg-amber-500/20 hover:bg-amber-500/30 text-gold-300 text-[11px] font-bold border border-amber-500/30 transition-all"
+                >
+                  Peek Text
+                </button>
+              </div>
             ) : expectedText ? (
-              <div className={`w-full text-right leading-loose font-arabic text-2xl p-2 transition-all ${
-                hideTargetText ? 'filter blur-md select-none opacity-40' : 'text-amber-100'
-              }`}>
-                {expectedText}
+              <div
+                dir="rtl"
+                className="w-full text-justify leading-[2.2] font-arabic text-2xl text-amber-100"
+                style={{ textAlign: 'justify', textJustify: 'inter-word' }}
+              >
+                {currentDisplayPage ? currentDisplayPage.text : expectedText}
               </div>
             ) : (
-              <div className="text-center text-slate-400 text-xs space-y-1">
+              <div className="flex flex-col items-center justify-center h-full text-center text-slate-400 text-xs space-y-1">
                 <p>Click "Fetch Reference Text" above to load the expected Quran passage for recitation.</p>
               </div>
             )}
           </div>
 
-          {expectedText && (
-            <div className="text-xs text-slate-400 flex items-center justify-between px-1">
-              <span>Passage Length: <strong className="text-gold-300">{expectedText.split(' ').length}</strong> words</span>
+          {expectedText && !hideTargetText && (
+            <div className="text-xs text-slate-400 flex items-center justify-between px-1 border-t border-slate-900 pt-2">
+              <span>
+                Total Passage: <strong className="text-gold-300">{expectedText.split(' ').length}</strong> words
+                {paginatedPages.length > 1 && ` • ${paginatedPages.length} Pages`}
+              </span>
               <span className="text-emerald-400 font-medium">Ready for Batch Recitation</span>
             </div>
           )}
         </div>
 
-        {/* Right Card: Batch Recording & Audio Controls */}
-        <div className="glass-panel-gold rounded-2xl p-6 border border-gold-500/30 shadow-xl flex flex-col justify-between space-y-5">
+        {/* Right Card: Batch Recording & Audio Controls (Sticky/Fixed Self-Start Alignment) */}
+        <div className="glass-panel-gold rounded-2xl p-6 border border-gold-500/30 shadow-xl flex flex-col justify-between space-y-5 lg:sticky lg:top-6 self-start">
           <div>
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <h3 className="font-bold text-slate-100 text-sm flex items-center gap-2">
                 <Mic className="w-4 h-4 text-gold-400" /> Batch Recitation Controls
               </h3>
-              {isRecording && (
+              {isStartingRecording ? (
+                <span className="font-mono text-xs font-bold text-amber-400 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-800 animate-pulse flex items-center gap-1">
+                  <RefreshCw className="w-3 h-3 animate-spin text-amber-400" /> Activating Mic...
+                </span>
+              ) : isRecording ? (
                 <span className="font-mono text-xs font-bold text-red-400 bg-red-950 px-2 py-0.5 rounded border border-red-800 animate-pulse">
                   REC: {formatTime(elapsedSeconds)}
                 </span>
-              )}
+              ) : null}
             </div>
             <p className="text-xs text-slate-400 mt-2">
               Click <strong>"Initiate Recitation"</strong>, recite the entire passage uninterrupted, and click <strong>"Conclude Recitation"</strong> to submit audio.
@@ -389,9 +516,43 @@ export const TasmeeTab = () => {
           {/* Live Audio Visualizer */}
           <AudioVisualizer analyser={analyserNode} isRecording={isRecording} className="h-28" />
 
-          {/* Batch Controls Action Buttons */}
+          {/* Batch Controls Action Buttons & Animated AI Pipeline Indicator */}
           <div className="space-y-3">
-            {!isRecording && !isAnalyzing ? (
+            {isStartingRecording ? (
+              <div className="py-4 rounded-xl bg-slate-900 border border-amber-500/40 text-center text-amber-300 text-xs font-bold flex items-center justify-center gap-2 animate-pulse">
+                <RefreshCw className="w-4 h-4 animate-spin text-amber-400" />
+                <span>Activating Microphone & Audio Graph...</span>
+              </div>
+            ) : isFinalizingStream ? (
+              <div className="p-4 rounded-xl bg-slate-900 border border-amber-500/40 text-center space-y-2 animate-pulse">
+                <div className="flex items-center justify-center gap-2 text-amber-300 text-xs font-bold">
+                  <RefreshCw className="w-4 h-4 animate-spin text-amber-400" />
+                  <span>Capturing Final Spoken Words (Audio Tail Buffer)...</span>
+                </div>
+              </div>
+            ) : isAnalyzing ? (
+              <div className="p-4 rounded-xl bg-slate-950 border border-gold-500/40 shadow-gold-glow space-y-3 animate-fadeIn">
+                <div className="flex items-center justify-between text-xs font-bold">
+                  <span className="text-gold-300 flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-amber-400 animate-spin-slow" /> AI Evaluation Pipeline
+                  </span>
+                  <span className="font-mono text-amber-400 font-extrabold">{analysisProgress}%</span>
+                </div>
+
+                {/* Progress Bar Container */}
+                <div className="w-full bg-slate-900 h-2.5 rounded-full overflow-hidden border border-slate-800">
+                  <div
+                    className="bg-gradient-to-r from-amber-500 to-amber-400 h-full rounded-full transition-all duration-300 shadow-gold-glow"
+                    style={{ width: `${analysisProgress}%` }}
+                  />
+                </div>
+
+                <div className="text-[11px] text-slate-400 font-medium flex items-center justify-between">
+                  <span className="animate-pulse text-slate-300 font-semibold">{analysisStage}</span>
+                  <span className="text-amber-400/80 font-mono text-[10px]">Whisper AI</span>
+                </div>
+              </div>
+            ) : !isRecording ? (
               <button
                 onClick={initiateRecitation}
                 disabled={!expectedText}
@@ -400,7 +561,7 @@ export const TasmeeTab = () => {
                 <Mic className="w-5 h-5" />
                 <span>Initiate Recitation</span>
               </button>
-            ) : isRecording ? (
+            ) : (
               <button
                 onClick={concludeRecitation}
                 className="w-full py-4 rounded-xl bg-gradient-to-r from-red-500 to-red-600 hover:from-red-400 hover:to-red-500 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-lg shadow-red-500/30 animate-pulse transition-all"
@@ -408,11 +569,6 @@ export const TasmeeTab = () => {
                 <MicOff className="w-5 h-5" />
                 <span>Conclude Recitation & Grade</span>
               </button>
-            ) : (
-              <div className="py-4 rounded-xl bg-slate-900 border border-gold-500/40 text-center text-gold-300 text-xs font-semibold flex items-center justify-center gap-2">
-                <RefreshCw className="w-4 h-4 animate-spin text-gold-400" />
-                <span>Analyzing audio with Whisper AI...</span>
-              </div>
             )}
           </div>
         </div>
@@ -458,6 +614,14 @@ export const TasmeeTab = () => {
               </div>
             </div>
           </div>
+
+          {/* Whisper STT Speech Output Banner */}
+          {evaluationResult.user_transcription && (
+            <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Whisper AI Recognized Speech Output:</span>
+              <p dir="rtl" className="font-arabic text-lg text-amber-200 text-right">{evaluationResult.user_transcription}</p>
+            </div>
+          )}
 
           {/* Word-by-Word Color-Coded Comparison */}
           <div className="space-y-3">
