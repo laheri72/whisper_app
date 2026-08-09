@@ -6,6 +6,7 @@ import { OnboardingModal } from './components/OnboardingModal';
 import { TilawatTab } from './components/TilawatTab';
 import { TasmeeTab } from './components/TasmeeTab';
 import { IkhtebaarTab } from './components/IkhtebaarTab';
+import { AnalyticsTab } from './components/AnalyticsTab';
 import { RefreshCw } from 'lucide-react';
 
 // Create Theme & Auth Contexts for enterprise-grade state propagation
@@ -145,6 +146,7 @@ export function App() {
                 {activeTab === 'tilawat' && <TilawatTab />}
                 {activeTab === 'tasmee' && <TasmeeTab />}
                 {activeTab === 'ikhtebaar' && <IkhtebaarTab />}
+                {activeTab === 'analytics' && <AnalyticsTab />}
               </div>
             </main>
           </div>

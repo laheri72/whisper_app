@@ -16,9 +16,43 @@ from app.ai_service import init_whisper_model, transcribe_audio_file, compare_re
 app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key="super_secret_academic_key")
 
+def init_analytics_db():
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+    cursor.execute("CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, display_name TEXT)")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS recitation_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT,
+            module_type TEXT,
+            range_mode TEXT,
+            start_val INTEGER,
+            end_val INTEGER,
+            score INTEGER,
+            total_words INTEGER,
+            match_count INTEGER,
+            mistake_count INTEGER,
+            transcription TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS frequent_mistakes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT,
+            word TEXT,
+            norm_word TEXT,
+            error_count INTEGER DEFAULT 1,
+            last_missed DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(username, norm_word)
+        )
+    """)
+    conn.commit()
+    conn.close()
+
 @app.on_event("startup")
 async def startup_event():
-    # Pre-load Hugging Face Whisper AI model in background thread on server boot
+    init_analytics_db()
     print("🚀 Initializing Whisper AI Model (tarteel-ai/whisper-base-ar-quran)...")
     asyncio.create_task(asyncio.to_thread(init_whisper_model))
 
@@ -505,7 +539,15 @@ async def generate_ikhtebaar(mode: str, start_val: int, end_val: int, difficulty
         return {"error": str(e)}
 
 @app.post("/transcribe_and_compare")
-async def transcribe_and_compare(file: UploadFile = File(...), expected_text: str = Form(...)):
+async def transcribe_and_compare(
+    request: Request,
+    file: UploadFile = File(...),
+    expected_text: str = Form(...),
+    module_type: str = Form("tasmee"),
+    range_mode: str = Form("juz"),
+    start_val: int = Form(1),
+    end_val: int = Form(1)
+):
     """ Final Grading Endpoint for Tasmee & Ikhtebaar using Genuine Whisper AI STT """
     try:
         audio_bytes = await file.read()
@@ -528,7 +570,7 @@ async def transcribe_and_compare(file: UploadFile = File(...), expected_text: st
         # Handle Silence / No Speech Spoken
         if not norm_user_words or not norm_words:
             comparison = [{"word": w, "status": "mistake"} for w in display_words]
-            return {
+            res_payload = {
                 "score": 0,
                 "user_transcription": user_transcription or "(Silence / No speech detected)",
                 "transcription": user_transcription or "",
@@ -537,6 +579,21 @@ async def transcribe_and_compare(file: UploadFile = File(...), expected_text: st
                 "mistakes": len(display_words),
                 "total": len(display_words)
             }
+            # Record 0% session log
+            try:
+                username = request.session.get("user") or "guest"
+                conn = sqlite3.connect("users.db")
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO recitation_sessions 
+                    (username, module_type, range_mode, start_val, end_val, score, total_words, match_count, mistake_count, transcription)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (username, module_type, range_mode, start_val, end_val, 0, len(display_words), 0, len(display_words), user_transcription or ""))
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                print(f"Log Error: {e}")
+            return res_payload
 
         # Sequence Diff Matcher against Normalized Arabic Ground Truth
         matcher = difflib.SequenceMatcher(None, norm_words, norm_user_words)
@@ -559,6 +616,38 @@ async def transcribe_and_compare(file: UploadFile = File(...), expected_text: st
 
         score = int(round((match_count / len(display_words)) * 100)) if display_words else 0
 
+        # Record session log & frequent mistakes in database
+        try:
+            username = request.session.get("user") or "guest"
+            conn = sqlite3.connect("users.db")
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                INSERT INTO recitation_sessions 
+                (username, module_type, range_mode, start_val, end_val, score, total_words, match_count, mistake_count, transcription)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (username, module_type, range_mode, start_val, end_val, score, len(display_words), match_count, len(display_words) - match_count, user_transcription))
+            
+            # Log mistake words in frequent_mistakes table
+            for item in comparison:
+                if item["status"] == "mistake":
+                    w_raw = item["word"]
+                    w_cleaned = re.sub(r'[\uFD3E\uFD3F0-9\u0660-\u0669\s]+', '', w_raw).strip()
+                    w_norm = normalize_arabic(w_cleaned)
+                    if w_norm:
+                        cursor.execute("""
+                            INSERT INTO frequent_mistakes (username, word, norm_word, error_count)
+                            VALUES (?, ?, ?, 1)
+                            ON CONFLICT(username, norm_word) DO UPDATE SET
+                                error_count = error_count + 1,
+                                last_missed = CURRENT_TIMESTAMP
+                        """, (username, w_cleaned, w_norm))
+                        
+            conn.commit()
+            conn.close()
+        except Exception as db_err:
+            print(f"Analytics DB Log Warning: {db_err}")
+
         return {
             "score": score,
             "user_transcription": user_transcription,
@@ -571,3 +660,97 @@ async def transcribe_and_compare(file: UploadFile = File(...), expected_text: st
     except Exception as e:
         print(f"Recitation evaluation error: {e}")
         return {"error": f"Failed to grade recitation: {str(e)}"}
+
+@app.get("/api/analytics")
+async def get_user_analytics(request: Request):
+    """ Fetch Student Analytics Summary & 30-Juz Heatmap """
+    username = request.session.get("user") or "guest"
+    
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+    
+    # 1. Fetch total sessions & accuracy
+    cursor.execute("SELECT COUNT(*), AVG(score) FROM recitation_sessions WHERE username = ?", (username,))
+    row = cursor.fetchone()
+    total_sessions = row[0] if row else 0
+    avg_score = int(round(row[1])) if (row and row[1] is not None) else 0
+    
+    # 2. Fetch recent sessions
+    cursor.execute("""
+        SELECT module_type, range_mode, start_val, end_val, score, total_words, match_count, mistake_count, timestamp
+        FROM recitation_sessions
+        WHERE username = ?
+        ORDER BY id DESC LIMIT 10
+    """, (username,))
+    recent_rows = cursor.fetchall()
+    recent_sessions = []
+    for r in recent_rows:
+        recent_sessions.append({
+            "module_type": r[0],
+            "range_mode": r[1],
+            "start_val": r[2],
+            "end_val": r[3],
+            "score": r[4],
+            "total_words": r[5],
+            "match_count": r[6],
+            "mistake_count": r[7],
+            "timestamp": r[8]
+        })
+        
+    # 3. Fetch Frequent Mistakes (Mutashabihat Queue)
+    cursor.execute("""
+        SELECT word, error_count, last_missed
+        FROM frequent_mistakes
+        WHERE username = ?
+        ORDER BY error_count DESC, id DESC LIMIT 15
+    """, (username,))
+    mistake_rows = cursor.fetchall()
+    frequent_mistakes = [{"word": r[0], "error_count": r[1], "last_missed": r[2]} for r in mistake_rows]
+    
+    # 4. Calculate Juz Mastery Heatmap (Juz 1 to 30)
+    cursor.execute("""
+        SELECT start_val, score FROM recitation_sessions
+        WHERE username = ? AND range_mode = 'juz'
+    """, (username,))
+    juz_rows = cursor.fetchall()
+    juz_scores = {}
+    for j_val, sc in juz_rows:
+        if j_val not in juz_scores:
+            juz_scores[j_val] = []
+        juz_scores[j_val].append(sc)
+        
+    juz_heatmap = []
+    for j in range(1, 31):
+        scores = juz_scores.get(j, [])
+        avg_juz_score = int(round(sum(scores) / len(scores))) if scores else 0
+        status = "mastered" if avg_juz_score >= 85 else "in_progress" if avg_juz_score >= 60 else "needs_revision" if scores else "unattempted"
+        juz_heatmap.append({
+            "juz": j,
+            "score": avg_juz_score,
+            "attempts": len(scores),
+            "status": status
+        })
+        
+    conn.close()
+    
+    return {
+        "username": username,
+        "total_sessions": total_sessions,
+        "avg_score": avg_score,
+        "mastery_level": "Hafiz Candidate" if avg_score >= 85 else "Advanced Reciter" if avg_score >= 70 else "Developing Reciter",
+        "recent_sessions": recent_sessions,
+        "frequent_mistakes": frequent_mistakes,
+        "juz_heatmap": juz_heatmap
+    }
+
+@app.post("/api/delete_mistake")
+async def delete_mistake(request: Request, word: str = Form(...)):
+    """ Delete mistaken word from frequent_mistakes queue """
+    username = request.session.get("user") or "guest"
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+    norm = normalize_arabic(word)
+    cursor.execute("DELETE FROM frequent_mistakes WHERE username = ? AND (word = ? OR norm_word = ?)", (username, word, norm))
+    conn.commit()
+    conn.close()
+    return {"success": True}

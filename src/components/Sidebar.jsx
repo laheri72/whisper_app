@@ -30,6 +30,15 @@ export const Sidebar = ({ activeTab, setActiveTab, user }) => {
       badge: 'Exam Mode',
       color: 'from-blue-500/20 to-blue-600/10 text-blue-400 border-blue-500/30',
       description: 'Intelligent AI testing & hints'
+    },
+    {
+      id: 'analytics',
+      label: 'Student Analytics',
+      arabic: 'لوحة الأداء',
+      icon: Activity,
+      badge: 'Metrics',
+      color: 'from-purple-500/20 to-purple-600/10 text-purple-400 border-purple-500/30',
+      description: 'Progress heatmap & mistake queue'
     }
   ];
 
