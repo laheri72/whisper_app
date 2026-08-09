@@ -1,4 +1,4 @@
-# Academic Quran Portal (Portal of Recitation Suite) 📖
+# Academic Quran Portal (Mukhtabir AI) 📖
 
 An enterprise-grade, AI-powered Quranic recitation verification and academic assessment platform. Powered by fine-tuned Quranic speech-to-text models (`tarteel-ai/whisper-base-ar-quran`), pure NumPy audio processing, Uthmani Arabic letter normalization, and student (*Talabat*) memorization tracking.
 
