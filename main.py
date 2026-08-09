@@ -53,7 +53,7 @@ def init_analytics_db():
 @app.on_event("startup")
 async def startup_event():
     init_analytics_db()
-    print("🚀 Initializing Whisper AI Model (tarteel-ai/whisper-base-ar-quran)...")
+    print("Initializing Whisper AI Model (tarteel-ai/whisper-base-ar-quran)...")
     asyncio.create_task(asyncio.to_thread(init_whisper_model))
 
 # DIRECTORY MOUNTS
@@ -258,7 +258,7 @@ async def get_audio(global_id: int):
             }
         )
     else:
-        print(f"❌ ERROR: Could not find {file_path}")
+        print(f"ERROR: Could not find {file_path}")
         raise HTTPException(status_code=404, detail="Audio file not found.")
 
 SURAH_NAMES = [
