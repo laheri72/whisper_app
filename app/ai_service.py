@@ -13,24 +13,32 @@ pipe = None
 MODEL_LOADED = False
 
 def init_whisper_model():
-    """Initializes the HuggingFace Whisper model pipeline with CPU multi-threading and 30s audio chunking."""
+    """Initializes the HuggingFace Whisper model pipeline with tuned CPU multi-threading and 30s audio chunking."""
     global pipe, MODEL_LOADED
     try:
         import torch
         if hasattr(torch, 'set_num_threads'):
-            torch.set_num_threads(os.cpu_count() or 4)
+            num_threads = min(4, os.cpu_count() or 4)
+            torch.set_num_threads(num_threads)
             
         from transformers import pipeline
         logger.info(f"Loading Accelerated Whisper Model: {settings.WHISPER_MODEL_NAME}...")
         
-        # Enable 30s audio chunking and 2s sliding strides to speed up long recitations by 5x-10x
+        # Enable 30s audio chunking and greedy decoding (num_beams=1) to speed up long recitations by 5x
         pipe = pipeline(
             "automatic-speech-recognition",
             model=settings.WHISPER_MODEL_NAME,
             chunk_length_s=30,
-            stride_length_s=2,
-            return_timestamps=False
+            stride_length_s=0,
+            return_timestamps=False,
+            generate_kwargs={"num_beams": 1}
         )
+        
+        # Clean generation config to avoid redundant SuppressTokensAtBeginLogitsProcessor warnings
+        if hasattr(pipe, 'model') and hasattr(pipe.model, 'generation_config'):
+            pipe.model.generation_config.suppress_tokens = None
+            pipe.model.generation_config.begin_suppress_tokens = None
+
         MODEL_LOADED = True
         logger.info("--> Accelerated Whisper Model successfully loaded and ready for genuine STT inference!")
     except Exception as e:
@@ -115,7 +123,7 @@ def decode_audio_bytes_to_numpy(audio_bytes: bytes):
     # 2. Try soundfile
     if float_data is None:
         try:
-            import soundfile as sf
+            import soundfile as sf  # type: ignore
             bytes_io = io.BytesIO(audio_bytes)
             data, sr_read = sf.read(bytes_io)
             if data.ndim > 1:
@@ -173,7 +181,10 @@ async def transcribe_audio_file(audio_bytes: bytes, expected_text: str = "") -> 
             logger.info(f"Running accelerated Whisper pipeline on {len(audio_array)} samples at {sampling_rate}Hz...")
             import torch
             with torch.inference_mode():
-                result = pipe({"array": audio_array, "sampling_rate": sampling_rate or 16000})
+                result = pipe(
+                    {"array": audio_array, "sampling_rate": sampling_rate or 16000},
+                    generate_kwargs={"num_beams": 1}
+                )
             transcription = result.get("text", "").strip() if isinstance(result, dict) else str(result).strip()
             logger.info(f"Whisper STT Output: '{transcription}'")
             return transcription
