@@ -158,9 +158,9 @@ def decode_audio_bytes_to_numpy(audio_bytes: bytes):
 
     return None, None
 
-async def transcribe_audio_file(audio_bytes: bytes, expected_text: str = "") -> str:
+async def transcribe_audio_file(audio_bytes: bytes = None, expected_text: str = "", file_path: str = None) -> str:
     """
-    Transcribes audio bytes strictly using the loaded Whisper AI model.
+    Transcribes audio bytes or file_path strictly using the loaded Whisper AI model.
     Passes raw 16kHz PCM audio array directly to bypass ffmpeg dependency issues.
     """
     global pipe, MODEL_LOADED
@@ -170,6 +170,10 @@ async def transcribe_audio_file(audio_bytes: bytes, expected_text: str = "") -> 
         return ""
 
     try:
+        if file_path and os.path.exists(file_path):
+            with open(file_path, "rb") as f:
+                audio_bytes = f.read()
+
         if not audio_bytes or len(audio_bytes) < 44:
             logger.info("Audio bytes empty or too small.")
             return ""
@@ -181,6 +185,7 @@ async def transcribe_audio_file(audio_bytes: bytes, expected_text: str = "") -> 
             logger.info(f"Running accelerated Whisper pipeline on {len(audio_array)} samples at {sampling_rate}Hz...")
             import torch
             with torch.inference_mode():
+                # Note: CPU execution runs strictly in float32 mode (equivalent to fp16=False) due to torch_dtype=torch.float32
                 result = pipe(
                     {"array": audio_array, "sampling_rate": sampling_rate or 16000},
                     generate_kwargs={"num_beams": 1}

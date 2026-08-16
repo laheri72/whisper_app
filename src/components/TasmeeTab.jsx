@@ -1,49 +1,84 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff, Play, CheckCircle2, AlertCircle, Eye, EyeOff, Layers, RefreshCw, Award, FileText, Sparkles, ChevronLeft, ChevronRight } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Mic, MicOff, Play, CheckCircle2, AlertCircle, Eye, EyeOff, Layers, RefreshCw, FileText, Sparkles, ChevronLeft, ChevronRight, Pause, Download } from 'lucide-react';
 import { getJuzPageRange, JUZ_LIST, SURAH_LIST } from '../utils/juzMapping';
-import { BatchAudioRecorder } from '../utils/audioRecorder';
+import { WaveMediaRecorder } from '../utils/audioRecorder';
 import { AudioVisualizer } from './AudioVisualizer';
+import { useApp } from '../context/AppContext';
+import { getPageFromManuscript } from '../utils/quranLookup';
 
 export const TasmeeTab = () => {
-  // Config States
-  const [rangeMode, setRangeMode] = useState('juz'); // 'juz' | 'page' | 'surah'
-  const [selectedJuz, setSelectedJuz] = useState(1);
-  const [fromPage, setFromPage] = useState(1);
-  const [toPage, setToPage] = useState(21);
-  const [startSurah, setStartSurah] = useState(1);
-  const [endSurah, setEndSurah] = useState(1);
+  const { tasmeeState, updateTasmee, quranData, fetchQuranData, loadingJson } = useApp();
+  const [viewMode, setViewMode] = useState('text'); // 'text' | 'manuscript'
+  const {
+    rangeMode,
+    selectedJuz,
+    fromPage,
+    toPage,
+    startSurah,
+    endSurah,
+    expectedText,
+    paginatedPages,
+    activePageIndex,
+    textError,
+    evaluationResult,
+    elapsedSeconds,
+    recordedAudioUrl,
+    recordedAudioBlob,
+    whisperCorrections,
+    transcriptionData,
+    isPaused
+  } = tasmeeState;
 
-  // Target Text & State
-  const [expectedText, setExpectedText] = useState('');
-  const [paginatedPages, setPaginatedPages] = useState([]);
-  const [activePageIndex, setActivePageIndex] = useState(0);
+  // Stateful setters mapped to context updates
+  const setRangeMode = (val) => updateTasmee({ rangeMode: typeof val === 'function' ? val(rangeMode) : val });
+  const setSelectedJuz = (val) => updateTasmee({ selectedJuz: typeof val === 'function' ? val(selectedJuz) : val });
+  const setFromPage = (val) => updateTasmee({ fromPage: typeof val === 'function' ? val(fromPage) : val });
+  const setToPage = (val) => updateTasmee({ toPage: typeof val === 'function' ? val(toPage) : val });
+  const setStartSurah = (val) => updateTasmee({ startSurah: typeof val === 'function' ? val(startSurah) : val });
+  const setEndSurah = (val) => updateTasmee({ endSurah: typeof val === 'function' ? val(endSurah) : val });
+  const setExpectedText = (val) => updateTasmee({ expectedText: typeof val === 'function' ? val(expectedText) : val });
+  const setPaginatedPages = (val) => updateTasmee({ paginatedPages: typeof val === 'function' ? val(paginatedPages) : val });
+  const setActivePageIndex = (val) => updateTasmee({ activePageIndex: typeof val === 'function' ? val(activePageIndex) : val });
+  const setTextError = (val) => updateTasmee({ textError: typeof val === 'function' ? val(textError) : val });
+  const setEvaluationResult = (val) => updateTasmee({ evaluationResult: typeof val === 'function' ? val(evaluationResult) : val });
+
+  // Transient UI states
   const [loadingText, setLoadingText] = useState(false);
   const [hideTargetText, setHideTargetText] = useState(false);
-  const [textError, setTextError] = useState('');
-
-  // Batch Audio Recording & AI Evaluation States
+  const [isZoomed, setIsZoomed] = useState(false);
+  const [zoomedPageList, setZoomedPageList] = useState([]);
+  const [currentZoomedIndex, setCurrentZoomedIndex] = useState(0);
   const [isStartingRecording, setIsStartingRecording] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isFinalizingStream, setIsFinalizingStream] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [analysisStage, setAnalysisStage] = useState('');
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [analyserNode, setAnalyserNode] = useState(null);
+  const [gradingError, setGradingError] = useState('');
 
-  // AI Grading Results State
-  const [evaluationResult, setEvaluationResult] = useState(null);
-
-  const recorderRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
   const timerIntervalRef = useRef(null);
   const textContainerRef = useRef(null);
+  const correctionsContainerRef = useRef(null);
+  const chunkIndexRef = useRef(0);
+  const sessionIdRef = useRef('');
 
-  // Whenever Juz selection changes, apply exact math formula
+  // Auto-scroll the real-time transcription container
+  useEffect(() => {
+    if (correctionsContainerRef.current) {
+      correctionsContainerRef.current.scrollTop = correctionsContainerRef.current.scrollHeight;
+    }
+  }, [transcriptionData]);
+
+  // Apply Juz page range calculations
   useEffect(() => {
     if (rangeMode === 'juz') {
       const range = getJuzPageRange(selectedJuz);
-      setFromPage(range.startPage);
-      setToPage(range.endPage);
+      updateTasmee({
+        fromPage: range.startPage,
+        toPage: range.endPage
+      });
     }
   }, [selectedJuz, rangeMode]);
 
@@ -51,23 +86,57 @@ export const TasmeeTab = () => {
   useEffect(() => {
     return () => {
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-      if (recorderRef.current) recorderRef.current.cleanup();
+      if (mediaRecorderRef.current) mediaRecorderRef.current.stop();
     };
   }, []);
 
-  // Reset scroll to top whenever page index or text changes
+  // Handle Keyboard Navigation inside Zoom Modal (RTL logic)
+  useEffect(() => {
+    if (!isZoomed || zoomedPageList.length === 0) return;
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setIsZoomed(false);
+      } else if (e.key === 'ArrowLeft') {
+        // Arabic RTL: Left Arrow goes to NEXT page
+        if (currentZoomedIndex < zoomedPageList.length - 1) {
+          setCurrentZoomedIndex(prev => Math.min(zoomedPageList.length - 1, prev + 1));
+        }
+      } else if (e.key === 'ArrowRight') {
+        // Arabic RTL: Right Arrow goes to PREVIOUS page
+        if (currentZoomedIndex > 0) {
+          setCurrentZoomedIndex(prev => Math.max(0, prev - 1));
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isZoomed, currentZoomedIndex, zoomedPageList]);
+
+
+  // Reset scroll on reference box changes
   useEffect(() => {
     if (textContainerRef.current) {
       textContainerRef.current.scrollTop = 0;
     }
   }, [activePageIndex, expectedText]);
 
-  // Fetch Reference Target Text from backend /api/tasmee_target
+  // Fetch Reference Text
   const fetchTasmeeTarget = async () => {
     setLoadingText(true);
     setTextError('');
     setEvaluationResult(null);
-    setActivePageIndex(0);
+    setGradingError('');
+    updateTasmee({
+      activePageIndex: 0,
+      whisperCorrections: '',
+      transcriptionData: [],
+      recordedAudioUrl: '',
+      recordedAudioBlob: null
+    });
 
     let modeParam = 'page';
     let startVal = fromPage;
@@ -97,18 +166,20 @@ export const TasmeeTab = () => {
         setExpectedText('');
         setPaginatedPages([]);
       } else {
-        setExpectedText(data.expected_text || '');
-        setPaginatedPages(data.pages || []);
+        updateTasmee({
+          expectedText: data.expected_text || '',
+          paginatedPages: data.pages || []
+        });
       }
     } catch (err) {
-      console.error("Tasmee target fetch error:", err);
+      console.error(err);
       setTextError("Failed to connect to backend server.");
     } finally {
       setLoadingText(false);
     }
   };
 
-  // 1. INITIATE RECITATION (Batch Mode)
+  // 1. INITIATE RECITATION (Continuous Buffer WAV Chunking Mode)
   const initiateRecitation = async () => {
     if (!expectedText) {
       alert("Please fetch target recitation text before initiating audio recording.");
@@ -117,19 +188,167 @@ export const TasmeeTab = () => {
 
     try {
       setIsStartingRecording(true);
-      const recorder = new BatchAudioRecorder();
-      recorderRef.current = recorder;
 
-      await recorder.startRecording();
+      // Clean up previous blob URL to prevent memory leaks
+      if (recordedAudioUrl) {
+        URL.revokeObjectURL(recordedAudioUrl);
+      }
+
+      setGradingError('');
+
+      // Clear previous recording buffer/blob state immediately (Overwrite)
+      updateTasmee({
+        recordedAudioUrl: '',
+        recordedAudioBlob: null,
+        whisperCorrections: '',
+        transcriptionData: [],
+        isPaused: false,
+        evaluationResult: null,
+        elapsedSeconds: 0
+      });
+
+      // Generate random unique Session ID
+      const sessId = 'sess_tasmee_' + Math.random().toString(36).substring(2, 9) + '_' + Date.now();
+      sessionIdRef.current = sessId;
+      chunkIndexRef.current = 0;
+
+      // Wipe incoming files from any previous chunks
+      await fetch('/api/cleanup_temp', { 
+        method: 'POST', 
+        body: new URLSearchParams({ session_id: sessionIdRef.current }) 
+      }).catch(() => {});
+
+      // Request microphone access
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1
+        }
+      });
+
+      const recorder = new WaveMediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+
+      // Handle 10-second chunks ondataavailable
+      recorder.ondataavailable = async (e) => {
+        if (!e.data || e.data.size === 0) return;
+
+        const formData = new FormData();
+        formData.append('file', e.data, `chunk_${chunkIndexRef.current}.wav`);
+        formData.append('session_id', sessionIdRef.current);
+        formData.append('chunk_index', chunkIndexRef.current);
+
+        chunkIndexRef.current += 1;
+
+        try {
+          const res = await fetch('/transcribe_chunk', {
+            method: 'POST',
+            body: formData
+          });
+          if (res.ok) {
+            const data = await res.json();
+            
+            // ADD DEBUGGING LOGS:
+            console.log("Whisper Chunk Response:", data);
+
+            if (data.comparison && Array.isArray(data.comparison)) {
+              updateTasmee(prev => ({
+                transcriptionData: [...prev.transcriptionData, ...data.comparison]
+              }));
+            } else if (data.words && Array.isArray(data.words)) {
+              updateTasmee(prev => ({
+                transcriptionData: [...prev.transcriptionData, ...data.words]
+              }));
+            } else if (Array.isArray(data)) {
+              updateTasmee(prev => ({
+                transcriptionData: [...prev.transcriptionData, ...data]
+              }));
+            } else if (data.transcription) {
+              updateTasmee(prev => ({
+                transcriptionData: [...prev.transcriptionData, { text: data.transcription, isRawString: true }]
+              }));
+            }
+          }
+        } catch (err) {
+          console.warn("Real-time chunk grading failed:", err);
+        }
+      };
+
+      // Set stopping event handler to collect complete merged recording WAV
+      recorder.onstop = async (finalBlob) => {
+        setIsFinalizingStream(false);
+        setIsAnalyzing(true);
+        setAnalysisProgress(10);
+        setAnalysisStage("AI is analyzing your recitation, please wait...");
+
+        // Save final blob locally and generate URL for HTML5 Audio player
+        const finalUrl = URL.createObjectURL(finalBlob);
+        updateTasmee({
+          recordedAudioBlob: finalBlob,
+          recordedAudioUrl: finalUrl
+        });
+
+        // Trigger Final neural grading assessment
+        let currentProg = 15;
+        const progressInterval = setInterval(() => {
+          currentProg += Math.floor(Math.random() * 8) + 5;
+          if (currentProg >= 92) currentProg = 92;
+          setAnalysisProgress(currentProg);
+        }, 300);
+
+        try {
+          const formData = new FormData();
+          formData.append('file', finalBlob, 'tasmee_recitation.wav');
+          formData.append('expected_text', expectedText);
+
+          const response = await fetch('/transcribe_and_compare', {
+            method: 'POST',
+            body: formData
+          });
+
+          clearInterval(progressInterval);
+
+          if (!response.ok) {
+            throw new Error(`Server returned HTTP status ${response.status}`);
+          }
+
+          const resultData = await response.json();
+          setAnalysisProgress(100);
+          setAnalysisStage("Recitation Assessment Complete!");
+          await new Promise(r => setTimeout(r, 300));
+          setEvaluationResult(resultData);
+
+          // Wipes temporary audio files on completion
+          fetch('/api/cleanup_temp', { 
+            method: 'POST', 
+            body: new URLSearchParams({ session_id: sessionIdRef.current }) 
+          }).catch(() => {});
+
+        } catch (err) {
+          clearInterval(progressInterval);
+          console.error("Evaluation error:", err);
+          setGradingError("Failed to grade recitation: " + err.message);
+        } finally {
+          setIsAnalyzing(false);
+          setAnalyserNode(null);
+          setAnalysisProgress(0);
+          setAnalysisStage('');
+        }
+      };
+
+      // Start recorder with 10s timeslice (10000ms)
+      recorder.start(10000);
       setAnalyserNode(recorder.getAnalyser());
       setIsRecording(true);
-      setEvaluationResult(null);
-      setElapsedSeconds(0);
 
-      // Start live timer
       timerIntervalRef.current = setInterval(() => {
-        setElapsedSeconds(prev => prev + 1);
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+          updateTasmee(prev => ({ elapsedSeconds: prev.elapsedSeconds + 1 }));
+        }
       }, 1000);
+
     } catch (err) {
       alert(err.message || "Failed to start microphone recording.");
     } finally {
@@ -137,9 +356,25 @@ export const TasmeeTab = () => {
     }
   };
 
-  // 2. CONCLUDE RECITATION & SEND ENTIRE AUDIO BLOB TO BACKEND /transcribe_and_compare
+  // 2. PAUSE RECITATION
+  const pauseRecitation = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.pause();
+      updateTasmee({ isPaused: true });
+    }
+  };
+
+  // 3. RESUME RECITATION
+  const resumeRecitation = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
+      mediaRecorderRef.current.resume();
+      updateTasmee({ isPaused: false });
+    }
+  };
+
+  // 4. CONCLUDE RECITATION & FLUSH CHUNKS
   const concludeRecitation = async () => {
-    if (!recorderRef.current || !isRecording) return;
+    if (!mediaRecorderRef.current || !isRecording) return;
 
     if (timerIntervalRef.current) {
       clearInterval(timerIntervalRef.current);
@@ -148,71 +383,16 @@ export const TasmeeTab = () => {
     try {
       setIsRecording(false);
       setIsFinalizingStream(true);
-      setAnalysisStage("Flushing audio stream buffer...");
+      setAnalysisStage("Flushing audio recording buffer...");
+      
+      // Stop the recorder, triggering the onstop callback with merged audio bytes
+      mediaRecorderRef.current.stop();
 
-      // 450ms audio tail buffer delay to ensure final spoken words are captured into PCM stream
-      await new Promise(r => setTimeout(r, 450));
-
-      setIsFinalizingStream(false);
-      setIsAnalyzing(true);
-      setAnalysisProgress(10);
-      setAnalysisStage("Analyzing Audio Recitation...");
-
-      // Stop recorder and encode standard 16kHz PCM WAV Audio Blob
-      const audioBlob = await recorderRef.current.stopRecording();
-
-      // Start progress bar animation for AI evaluation pipeline
-      let currentProg = 15;
-      const progressInterval = setInterval(() => {
-        currentProg += Math.floor(Math.random() * 8) + 5;
-        if (currentProg >= 92) {
-          currentProg = 92; // Hold at 92% until response returns
-        }
-        setAnalysisProgress(currentProg);
-
-        if (currentProg < 35) {
-          setAnalysisStage("Analyzing Audio Recitation...");
-        } else if (currentProg < 75) {
-          setAnalysisStage("Academic Neural Evaluation...");
-        } else if (currentProg < 92) {
-          setAnalysisStage("Verse Alignment & Assessment...");
-        }
-      }, 300);
-
-      // Construct FormData payload for /transcribe_and_compare
-      const formData = new FormData();
-      formData.append('file', audioBlob, 'tasmee_recitation.wav');
-      formData.append('expected_text', expectedText);
-
-      // Send to backend endpoint
-      const response = await fetch('/transcribe_and_compare', {
-        method: 'POST',
-        body: formData,
-      });
-
-      clearInterval(progressInterval);
-
-      if (!response.ok) {
-        throw new Error(`Server returned HTTP status ${response.status}`);
-      }
-
-      const resultData = await response.json();
-
-      setAnalysisProgress(100);
-      setAnalysisStage("Recitation Assessment Complete!");
-
-      // Brief 300ms pause to show 100% completion bar before displaying results
-      await new Promise(r => setTimeout(r, 300));
-      setEvaluationResult(resultData);
     } catch (err) {
-      console.error("Recitation evaluation error:", err);
-      alert("Failed to grade recitation: " + err.message);
-    } finally {
+      console.error(err);
+      alert("Failed to wrap up recitation: " + err.message);
       setIsAnalyzing(false);
       setIsFinalizingStream(false);
-      setAnalyserNode(null);
-      setAnalysisProgress(0);
-      setAnalysisStage('');
     }
   };
 
@@ -222,11 +402,9 @@ export const TasmeeTab = () => {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
-  // Metrics summary
   const matchCount = evaluationResult?.comparison?.filter(c => c.status === 'match').length || 0;
   const mistakeCount = evaluationResult?.comparison?.filter(c => c.status === 'mistake').length || 0;
   const totalWords = evaluationResult?.comparison?.length || 0;
-
   const currentDisplayPage = paginatedPages.length > 0 ? paginatedPages[activePageIndex] : null;
 
   return (
@@ -293,7 +471,6 @@ export const TasmeeTab = () => {
                 </select>
               </div>
 
-              {/* Exact Math Display Badge */}
               <div className="p-3 rounded-xl bg-slate-900/90 border border-gold-500/30 text-center">
                 <span className="block text-[10px] text-slate-400 font-semibold uppercase">Calculated Range</span>
                 <span className="text-xs font-mono font-bold text-amber-400">
@@ -381,8 +558,32 @@ export const TasmeeTab = () => {
             </h3>
 
             <div className="flex items-center gap-2">
-              {/* Paginated Page Navigator */}
-              {paginatedPages.length > 1 && !hideTargetText && (
+              {/* Text Mode vs Manuscript Mode Selector */}
+              <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-[10px] uppercase font-bold">
+                <button
+                  onClick={() => setViewMode('text')}
+                  className={`px-2.5 py-1 rounded transition-all ${
+                    viewMode === 'text' ? 'bg-amber-500 text-slate-950 font-bold shadow-sm' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Text
+                </button>
+                <button
+                  onClick={async () => {
+                    setViewMode('manuscript');
+                    if (!quranData) {
+                      await fetchQuranData();
+                    }
+                  }}
+                  className={`px-2.5 py-1 rounded transition-all ${
+                    viewMode === 'manuscript' ? 'bg-amber-500 text-slate-950 font-bold shadow-sm' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Manuscript
+                </button>
+              </div>
+
+              {paginatedPages.length > 1 && !hideTargetText && viewMode === 'text' && (
                 <div className="flex items-center gap-1 bg-slate-900 px-2 py-1 rounded-lg border border-slate-800 text-xs">
                   <button
                     onClick={() => setActivePageIndex(prev => Math.max(0, prev - 1))}
@@ -435,16 +636,16 @@ export const TasmeeTab = () => {
             </div>
           </div>
 
-          {/* Reference Text Display / Memory Test Shrunk Container */}
+          {/* Reference Text Display */}
           <div
             ref={textContainerRef}
             className={`transition-all duration-300 rounded-xl bg-slate-950/80 border border-slate-800 p-4 ${
               hideTargetText ? 'h-[85px] flex items-center justify-between border-amber-500/40 bg-amber-950/20' : 'h-[280px] overflow-y-auto block'
             }`}
           >
-            {loadingText ? (
-              <div className="flex items-center justify-center h-full gap-2 text-gold-400 text-xs font-semibold">
-                <RefreshCw className="w-4 h-4 animate-spin" /> Fetching target text from database...
+            {loadingText || (viewMode === 'manuscript' && loadingJson) ? (
+              <div className="flex items-center justify-center h-full gap-2 text-gold-400 text-xs font-semibold animate-pulse">
+                <RefreshCw className="w-4 h-4 animate-spin" /> {viewMode === 'manuscript' ? 'Loading manuscript pages...' : 'Fetching target text from database...'}
               </div>
             ) : textError ? (
               <div className="flex flex-col items-center justify-center h-full text-center text-red-400 text-xs font-semibold space-y-1">
@@ -452,7 +653,6 @@ export const TasmeeTab = () => {
                 <p>{textError}</p>
               </div>
             ) : hideTargetText ? (
-              /* Sleek Shrunk Memory Test Badge */
               <div className="flex items-center justify-between w-full px-2 text-xs">
                 <div className="flex items-center gap-2 text-amber-300 font-semibold">
                   <EyeOff className="w-4 h-4 text-amber-400" />
@@ -465,7 +665,62 @@ export const TasmeeTab = () => {
                   Peek Text
                 </button>
               </div>
-            ) : expectedText ? (
+            ) : viewMode === 'manuscript' ? (() => {
+              const pageRangeList = [];
+              if (rangeMode === 'page' || rangeMode === 'juz') {
+                for (let p = fromPage; p <= toPage; p++) {
+                  pageRangeList.push(p);
+                }
+              } else {
+                if (paginatedPages && paginatedPages.length > 0) {
+                  paginatedPages.forEach((pg, idx) => {
+                    const parsedNum = Number(pg.page || pg.page_number);
+                    if (!isNaN(parsedNum) && parsedNum > 0) {
+                      pageRangeList.push(parsedNum);
+                    } else {
+                      pageRangeList.push(idx + 1);
+                    }
+                  });
+                } else {
+                  pageRangeList.push(1);
+                }
+              }
+              return (
+                <div className="space-y-6 select-none" dir="rtl">
+                  {pageRangeList.map(pageNum => {
+                    const pageData = getPageFromManuscript(quranData, pageNum);
+                    const imgUrl = pageData?.image_base64 || pageData?.misri_quran || "";
+                    return (
+                      <div key={pageNum} className="space-y-2 border-b border-slate-900 pb-6 last:border-0">
+                        <span className="block text-xs font-semibold text-slate-400 font-mono text-center">
+                          Manuscript Page {pageNum}
+                        </span>
+                        <div className="flex justify-center p-2 bg-slate-950 rounded-xl border border-slate-900 min-h-[200px]">
+                          {imgUrl ? (
+                            <img
+                              src={imgUrl}
+                              alt={`Misri Quran Page ${pageNum}`}
+                              onClick={() => {
+                                setZoomedPageList(pageRangeList);
+                                const idx = pageRangeList.indexOf(pageNum);
+                                setCurrentZoomedIndex(idx >= 0 ? idx : 0);
+                                setIsZoomed(true);
+                              }}
+                              className="max-h-[300px] object-contain rounded border border-slate-800 animate-fadeIn cursor-pointer transition-all hover:scale-[1.02] hover:border-gold-500/40 shadow-md"
+                              title="Click to enlarge manuscript page"
+                            />
+                          ) : (
+                            <span className="text-slate-600 text-xs py-8">
+                              Manuscript page not found in quran_data.json
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })() : expectedText ? (
               <div
                 dir="rtl"
                 className="w-full text-justify leading-[2.2] font-arabic text-2xl text-amber-100"
@@ -491,32 +746,36 @@ export const TasmeeTab = () => {
           )}
         </div>
 
-        {/* Right Card: Batch Recording & Audio Controls (Sticky/Fixed Self-Start Alignment) */}
+        {/* Right Card: Audio Controls & Live Grading Visualizer */}
         <div className="glass-panel-gold rounded-2xl p-6 border border-gold-500/30 shadow-xl flex flex-col justify-between space-y-5 lg:sticky lg:top-6 self-start">
           <div>
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <h3 className="font-bold text-slate-100 text-sm flex items-center gap-2">
-                <Mic className="w-4 h-4 text-gold-400" /> Batch Recitation Controls
+                <Mic className="w-4 h-4 text-gold-400" /> Recitation Buffer Recorder
               </h3>
               {isStartingRecording ? (
                 <span className="font-mono text-xs font-bold text-amber-400 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-800 animate-pulse flex items-center gap-1">
                   <RefreshCw className="w-3 h-3 animate-spin text-amber-400" /> Activating Mic...
                 </span>
               ) : isRecording ? (
-                <span className="font-mono text-xs font-bold text-red-400 bg-red-950 px-2 py-0.5 rounded border border-red-800 animate-pulse">
-                  REC: {formatTime(elapsedSeconds)}
+                <span className={`font-mono text-xs font-bold px-2 py-0.5 rounded border ${
+                  isPaused 
+                    ? 'text-yellow-400 bg-yellow-950/40 border-yellow-800' 
+                    : 'text-red-400 bg-red-950 border-red-800 animate-pulse'
+                }`}>
+                  {isPaused ? "PAUSED" : "REC"}: {formatTime(elapsedSeconds)}
                 </span>
               ) : null}
             </div>
             <p className="text-xs text-slate-400 mt-2">
-              Click <strong>"Initiate Recitation"</strong>, recite the entire passage uninterrupted, and click <strong>"Conclude Recitation"</strong> to submit audio.
+              Click <strong>"Initiate Recitation"</strong> to start. Chunks are dynamically sent to the Whisper AI model every 10 seconds. Click <strong>"Conclude Recitation"</strong> once finished.
             </p>
           </div>
 
           {/* Live Audio Visualizer */}
-          <AudioVisualizer analyser={analyserNode} isRecording={isRecording} className="h-28" />
+          <AudioVisualizer analyser={analyserNode} isRecording={isRecording && !isPaused} className="h-28" />
 
-          {/* Batch Controls Action Buttons & Animated AI Pipeline Indicator */}
+          {/* Actions & Real-Time corrections panel */}
           <div className="space-y-3">
             {isStartingRecording ? (
               <div className="py-4 rounded-xl bg-slate-900 border border-amber-500/40 text-center text-amber-300 text-xs font-bold flex items-center justify-center gap-2 animate-pulse">
@@ -527,19 +786,18 @@ export const TasmeeTab = () => {
               <div className="p-4 rounded-xl bg-slate-900 border border-amber-500/40 text-center space-y-2 animate-pulse">
                 <div className="flex items-center justify-center gap-2 text-amber-300 text-xs font-bold">
                   <RefreshCw className="w-4 h-4 animate-spin text-amber-400" />
-                  <span>Capturing Final Spoken Words (Audio Tail Buffer)...</span>
+                  <span>Merging Audio Chunks & Finalizing Stream...</span>
                 </div>
               </div>
             ) : isAnalyzing ? (
               <div className="p-4 rounded-xl bg-slate-950 border border-gold-500/40 shadow-gold-glow space-y-3 animate-fadeIn">
                 <div className="flex items-center justify-between text-xs font-bold">
                   <span className="text-gold-300 flex items-center gap-1.5">
-                    <Sparkles className="w-4 h-4 text-amber-400 animate-spin-slow" /> AI Evaluation Pipeline
+                    <Sparkles className="w-4 h-4 text-amber-400 animate-spin-slow" /> AI Grading System
                   </span>
                   <span className="font-mono text-amber-400 font-extrabold">{analysisProgress}%</span>
                 </div>
 
-                {/* Progress Bar Container */}
                 <div className="w-full bg-slate-900 h-2.5 rounded-full overflow-hidden border border-slate-800">
                   <div
                     className="bg-gradient-to-r from-amber-500 to-amber-400 h-full rounded-full transition-all duration-300 shadow-gold-glow"
@@ -553,23 +811,109 @@ export const TasmeeTab = () => {
                 </div>
               </div>
             ) : !isRecording ? (
-              <button
-                onClick={initiateRecitation}
-                disabled={!expectedText}
-                className="w-full py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-slate-950 font-extrabold text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition-all disabled:opacity-40"
-              >
-                <Mic className="w-5 h-5" />
-                <span>Initiate Recitation</span>
-              </button>
+              <div className="space-y-3">
+                <button
+                  onClick={initiateRecitation}
+                  disabled={!expectedText}
+                  className="w-full py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-slate-950 font-extrabold text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition-all disabled:opacity-40"
+                >
+                  <Mic className="w-5 h-5" />
+                  <span>Initiate Recitation</span>
+                </button>
+
+                {/* HTML5 Player & Download controls */}
+                {recordedAudioUrl && (
+                  <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3 animate-fadeIn">
+                    <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">Play Back Recorded Session:</span>
+                    <audio src={recordedAudioUrl} controls className="w-full" />
+                    
+                    <a
+                      href={recordedAudioUrl}
+                      download="tasmee_recitation.wav"
+                      className="w-full py-2.5 rounded-xl bg-slate-800 border border-slate-700 hover:bg-slate-700 hover:border-gold-500/40 text-gold-300 font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-md"
+                    >
+                      <Download className="w-4 h-4" /> Save Recording
+                    </a>
+                  </div>
+                )}
+              </div>
             ) : (
-              <button
-                onClick={concludeRecitation}
-                className="w-full py-4 rounded-xl bg-gradient-to-r from-red-500 to-red-600 hover:from-red-400 hover:to-red-500 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-lg shadow-red-500/30 animate-pulse transition-all"
-              >
-                <MicOff className="w-5 h-5" />
-                <span>Conclude Recitation & Grade</span>
-              </button>
+              <div className="space-y-3">
+                {/* Pause/Resume Switch controls */}
+                <div className="flex gap-2">
+                  {isPaused ? (
+                    <button
+                      onClick={resumeRecitation}
+                      className="flex-1 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-slate-950 font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md"
+                    >
+                      <Play className="w-4 h-4" /> Resume Stream
+                    </button>
+                  ) : (
+                    <button
+                      onClick={pauseRecitation}
+                      className="flex-1 py-3 rounded-xl bg-slate-800 border border-slate-700 hover:bg-slate-700 text-amber-400 font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md"
+                    >
+                      <Pause className="w-4 h-4" /> Pause Stream
+                    </button>
+                  )}
+                </div>
+
+                <button
+                  onClick={concludeRecitation}
+                  className="w-full py-4 rounded-xl bg-gradient-to-r from-red-500 to-red-600 hover:from-red-400 hover:to-red-500 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-lg shadow-red-500/30 transition-all"
+                >
+                  <MicOff className="w-5 h-5" />
+                  <span>Conclude Recitation & Grade</span>
+                </button>
+              </div>
             )}
+
+            {/* Non-blocking inline grading error indicator */}
+            {gradingError && (
+              <div className="p-4 rounded-xl bg-red-950/80 border border-red-500/40 text-red-300 text-xs font-bold flex items-center gap-2 animate-fadeIn">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>{gradingError}</span>
+              </div>
+            )}
+
+            {/* Real-time transcription dynamic panel with scroll control and conditional word styling */}
+            <div className="p-4 rounded-xl bg-slate-950/85 border border-slate-800 space-y-2">
+              <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">Real-Time Transcription (Whisper AI):</span>
+              <div 
+                ref={correctionsContainerRef}
+                className="max-h-[160px] min-h-[60px] overflow-y-auto pr-1 flex flex-wrap flex-row-reverse justify-start items-center gap-2 text-right leading-relaxed font-arabic text-2xl"
+                dir="rtl"
+              >
+                {transcriptionData && transcriptionData.length > 0 ? (
+                  transcriptionData.map((item, idx) => {
+                    if (item.isRawString) {
+                      return (
+                        <span key={idx} className="text-amber-200/90 font-medium">
+                          {item.text}
+                        </span>
+                      );
+                    }
+                    const isCorrect = item.status === 'match' || item.status === 'correct' || item.correct === true || item.status === 'equal';
+                    const wordText = item.word || item.text || (typeof item === 'string' ? item : JSON.stringify(item));
+                    return (
+                      <span
+                        key={idx}
+                        className={isCorrect 
+                          ? "text-emerald-400 font-bold transition-all" 
+                          : "text-red-500 line-through decoration-red-600/70 decoration-2 font-bold animate-pulse"
+                        }
+                      >
+                        {wordText}
+                      </span>
+                    );
+                  })
+                ) : (
+                  <div className="w-full text-center text-slate-600 font-mono text-sm tracking-widest py-2">
+                    - - - - - - - -
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -577,7 +921,6 @@ export const TasmeeTab = () => {
       {/* 3. Academic Evaluation & Grade Report Card */}
       {evaluationResult && (
         <div className="glass-panel-gold rounded-2xl p-6 border border-gold-500/40 shadow-2xl space-y-6 animate-fadeIn">
-          {/* Grade Summary Header */}
           <div className="flex flex-wrap items-center justify-between gap-6 border-b border-slate-800 pb-5">
             <div className="flex items-center gap-4">
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-slate-950 font-extrabold text-2xl flex items-center justify-center shadow-gold-glow">
@@ -598,7 +941,6 @@ export const TasmeeTab = () => {
               </div>
             </div>
 
-            {/* Quick Metrics */}
             <div className="flex items-center gap-4">
               <div className="px-4 py-2 rounded-xl bg-slate-900/90 border border-slate-800 text-center">
                 <span className="block text-[10px] text-slate-400 font-semibold uppercase">Total Words</span>
@@ -615,7 +957,6 @@ export const TasmeeTab = () => {
             </div>
           </div>
 
-          {/* Recognized Speech Output Banner */}
           {evaluationResult.user_transcription && (
             <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Recognized Recitation Output:</span>
@@ -623,7 +964,6 @@ export const TasmeeTab = () => {
             </div>
           )}
 
-          {/* Word-by-Word Color-Coded Comparison */}
           <div className="space-y-3">
             <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
               <span>Word-by-Word Analysis (Green = Match, Red = Mistake)</span>
@@ -647,6 +987,69 @@ export const TasmeeTab = () => {
                 );
               })}
             </div>
+          </div>
+        </div>
+      )}
+      {isZoomed && zoomedPageList.length > 0 && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-fadeIn cursor-zoom-out"
+          onClick={() => setIsZoomed(false)}
+        >
+          {/* Previous Page Navigation */}
+          {currentZoomedIndex > 0 && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setCurrentZoomedIndex(prev => Math.max(0, prev - 1));
+              }}
+              className="absolute left-6 top-1/2 -translate-y-1/2 z-50 text-white hover:text-amber-400 bg-slate-900/60 hover:bg-slate-900/90 border border-slate-700/50 w-12 h-12 rounded-full flex items-center justify-center shadow-2xl transition-all cursor-pointer"
+              title="Previous Page"
+            >
+              <ChevronLeft className="w-6 h-6" />
+            </button>
+          )}
+
+          {/* Next Page Navigation */}
+          {currentZoomedIndex < zoomedPageList.length - 1 && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setCurrentZoomedIndex(prev => Math.min(zoomedPageList.length - 1, prev + 1));
+              }}
+              className="absolute right-6 top-1/2 -translate-y-1/2 z-50 text-white hover:text-amber-400 bg-slate-900/60 hover:bg-slate-900/90 border border-slate-700/50 w-12 h-12 rounded-full flex items-center justify-center shadow-2xl transition-all cursor-pointer"
+              title="Next Page"
+            >
+              <ChevronRight className="w-6 h-6" />
+            </button>
+          )}
+
+          <div className="relative max-w-full max-h-[90vh] flex flex-col items-center justify-center">
+            <button
+              onClick={() => setIsZoomed(false)}
+              className="absolute top-4 right-4 z-50 text-white hover:text-red-400 font-extrabold text-lg bg-black/60 hover:bg-black/85 w-10 h-10 rounded-full flex items-center justify-center shadow-lg transition-all"
+              title="Close Enlarged View"
+            >
+              ✕
+            </button>
+            
+            {(() => {
+              const pageNum = zoomedPageList[currentZoomedIndex];
+              const pageData = getPageFromManuscript(quranData, pageNum);
+              const imgUrl = pageData?.image_base64 || pageData?.misri_quran || "";
+              return (
+                <div className="flex flex-col items-center space-y-2 select-none">
+                  <span className="text-slate-300 font-bold font-mono text-xs bg-slate-950/80 border border-slate-800 px-3 py-1 rounded-full">
+                    Page {pageNum} ({currentZoomedIndex + 1} of {zoomedPageList.length})
+                  </span>
+                  <img
+                    src={imgUrl}
+                    alt={`Enlarged Quran Page ${pageNum}`}
+                    className="max-h-[82vh] max-w-full object-contain rounded-lg shadow-2xl border border-slate-800 cursor-default animate-scaleIn"
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}

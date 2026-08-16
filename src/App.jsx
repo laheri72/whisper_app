@@ -8,6 +8,7 @@ import { TasmeeTab } from './components/TasmeeTab';
 import { IkhtebaarTab } from './components/IkhtebaarTab';
 import { AnalyticsTab } from './components/AnalyticsTab';
 import { RefreshCw } from 'lucide-react';
+import { AppProvider } from './context/AppContext';
 
 // Create Theme & Auth Contexts for enterprise-grade state propagation
 export const ThemeContext = createContext();
@@ -116,41 +117,43 @@ export function App() {
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme }}>
       <AuthContext.Provider value={{ user: userProfileData, handleLogout }}>
-        {/* Core Layout wrapper with strict height & width limits to solve blank screen issues */}
-        <div className="h-screen w-screen flex overflow-hidden bg-slate-50 text-slate-800 dark:bg-slate-950 dark:text-slate-100 transition-colors duration-200">
-          
-          {/* Persistent Sidebar */}
-          <Sidebar 
-            activeTab={activeTab} 
-            setActiveTab={setActiveTab} 
-            user={userProfileData}
-            theme={theme}
-            toggleTheme={toggleTheme}
-            handleLogout={handleLogout}
-          />
-
-          {/* Main Dashboard Space */}
-          <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
-            {/* Header */}
-            <Header 
+        <AppProvider>
+          {/* Core Layout wrapper with strict height & width limits to solve blank screen issues */}
+          <div className="h-screen w-screen flex overflow-hidden bg-slate-50 text-slate-800 dark:bg-slate-950 dark:text-slate-100 transition-colors duration-200">
+            
+            {/* Persistent Sidebar */}
+            <Sidebar 
               activeTab={activeTab} 
-              user={userProfileData} 
+              setActiveTab={setActiveTab} 
+              user={userProfileData}
               theme={theme}
               toggleTheme={toggleTheme}
               handleLogout={handleLogout}
             />
 
-            {/* Scrollable Viewport Container */}
-            <main className="flex-1 overflow-y-auto p-6 md:p-8 bg-slate-100/50 dark:bg-slate-900/30 transition-colors duration-200">
-              <div className="max-w-7xl w-full mx-auto h-full">
-                {activeTab === 'tilawat' && <TilawatTab />}
-                {activeTab === 'tasmee' && <TasmeeTab />}
-                {activeTab === 'ikhtebaar' && <IkhtebaarTab />}
-                {activeTab === 'analytics' && <AnalyticsTab />}
-              </div>
-            </main>
+            {/* Main Dashboard Space */}
+            <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+              {/* Header */}
+              <Header 
+                activeTab={activeTab} 
+                user={userProfileData} 
+                theme={theme}
+                toggleTheme={toggleTheme}
+                handleLogout={handleLogout}
+              />
+
+              {/* Scrollable Viewport Container */}
+              <main className="flex-1 overflow-y-auto p-6 md:p-8 bg-slate-100/50 dark:bg-slate-900/30 transition-colors duration-200">
+                <div className="max-w-7xl w-full mx-auto h-full">
+                  {activeTab === 'tilawat' && <TilawatTab />}
+                  {activeTab === 'tasmee' && <TasmeeTab />}
+                  {activeTab === 'ikhtebaar' && <IkhtebaarTab />}
+                  {activeTab === 'analytics' && <AnalyticsTab />}
+                </div>
+              </main>
+            </div>
           </div>
-        </div>
+        </AppProvider>
       </AuthContext.Provider>
     </ThemeContext.Provider>
   );

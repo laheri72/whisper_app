@@ -50,9 +50,13 @@ def init_analytics_db():
     conn.commit()
     conn.close()
 
+TEMP_AUDIO_DIR = os.path.join(os.path.abspath("."), "temp_audio")
+
 @app.on_event("startup")
 async def startup_event():
     init_analytics_db()
+    os.makedirs(TEMP_AUDIO_DIR, exist_ok=True)
+    print(f"Created/Verified temporary audio folder at: {TEMP_AUDIO_DIR}")
     print("Initializing Whisper AI Model (tarteel-ai/whisper-base-ar-quran)...")
     asyncio.create_task(asyncio.to_thread(init_whisper_model))
 
@@ -483,9 +487,38 @@ async def generate_ikhtebaar(mode: str, start_val: int, end_val: int, difficulty
             selected_start = random.choice(hard_pool) if hard_pool else random.choice(valid_starts)
 
         start_idx = ayahs_pool.index(selected_start)
-        stop_idx = min(start_idx + 15, len(ayahs_pool) - 1)
-        selected_stop = ayahs_pool[stop_idx]
+        start_page = selected_start[2]
         
+        # Calculate the starting position ratio on start_page
+        start_page_ayahs = [a for a in ayahs_pool if a[2] == start_page]
+        start_idx_in_page = start_page_ayahs.index(selected_start) if selected_start in start_page_ayahs else 0
+        n_start = len(start_page_ayahs) or 1
+        p_start = start_idx_in_page / n_start
+
+        # Scan for ending candidates whose distance is strictly between 1.0 and 1.5 pages
+        candidates = []
+        for idx in range(start_idx + 1, len(ayahs_pool)):
+            curr = ayahs_pool[idx]
+            curr_page = curr[2]
+            curr_page_ayahs = [a for a in ayahs_pool if a[2] == curr_page]
+            curr_idx_in_page = curr_page_ayahs.index(curr) if curr in curr_page_ayahs else 0
+            n_curr = len(curr_page_ayahs) or 1
+            p_curr = curr_idx_in_page / n_curr
+            
+            dist = (curr_page - start_page) + (p_curr - p_start)
+            if 1.0 <= dist <= 1.5:
+                candidates.append((idx, curr))
+
+        # Handle page boundary edge case (near the end of the Quran, or if no candidates)
+        if not candidates or start_page >= 603:
+            stop_idx = len(ayahs_pool) - 1
+            selected_stop = ayahs_pool[stop_idx]
+        else:
+            # Select candidate closer to 1.25 pages (around 60% of candidates list)
+            chosen_idx, chosen_curr = candidates[min(int(len(candidates) * 0.6), len(candidates) - 1)]
+            stop_idx = chosen_idx
+            selected_stop = chosen_curr
+
         target_page = selected_start[2]
         target_surah = selected_start[0]
 
@@ -523,12 +556,29 @@ async def generate_ikhtebaar(mode: str, start_val: int, end_val: int, difficulty
         conn_map.close()
         conn_text.close()
 
+        surah_num = selected_start[0]
+        surah_name = SURAH_NAMES[surah_num] if 1 <= surah_num <= 114 else f"Surah {surah_num}"
+        ayah_number = selected_start[1]
+        
+        end_surah_num = selected_stop[0]
+        end_surah_name = SURAH_NAMES[end_surah_num] if 1 <= end_surah_num <= 114 else f"Surah {end_surah_num}"
+        end_ayah_number = selected_stop[1]
+        end_page_number = selected_stop[2]
+
         return {
             "question_id": f"{selected_start[0]}-{selected_start[1]}", 
-            "start_text": start_text,
-            "stop_text": stop_text,
-            "expected_full_text": expected_full_text,
+            "surah_name": surah_name,
+            "ayah_number": ayah_number,
             "page_number": target_page,
+            "arabic_text": start_text,
+            "start_text": start_text,
+            "start_arabic_text": start_text,
+            "stop_text": stop_text,
+            "end_arabic_text": stop_text,
+            "expected_full_text": expected_full_text,
+            "end_surah_name": end_surah_name,
+            "end_ayah_number": end_ayah_number,
+            "end_page_number": end_page_number,
             "hint_1": hint_1,
             "hint_2": hint_2,
             "hint_3": hint_3
@@ -536,6 +586,56 @@ async def generate_ikhtebaar(mode: str, start_val: int, end_val: int, difficulty
 
     except Exception as e:
         print(f"Ikhtebaar Error: {e}")
+        return {"error": str(e)}
+
+@app.post("/transcribe_chunk")
+async def transcribe_chunk(
+    file: UploadFile = File(...),
+    session_id: str = Form(...),
+    chunk_index: int = Form(...)
+):
+    """ Real-time chunk transcription endpoint. Saves chunks physically. """
+    try:
+        os.makedirs(TEMP_AUDIO_DIR, exist_ok=True)
+        filename = f"{session_id}_chunk_{chunk_index}.wav"
+        filepath = os.path.join(TEMP_AUDIO_DIR, filename)
+        
+        audio_bytes = await file.read()
+        with open(filepath, "wb") as f:
+            f.write(audio_bytes)
+            
+        print(f"[Chunk Save] Saved incoming chunk to file: {filepath}")
+        
+        # Transcribe the chunk with cpu float32 / fp16=False optimization
+        transcription = await transcribe_audio_file(audio_bytes)
+        
+        return {
+            "chunk_index": chunk_index,
+            "transcription": transcription,
+            "status": "success",
+            "file_path": filepath
+        }
+    except Exception as e:
+        print(f"Chunk transcription error: {e}")
+        return {"error": str(e)}
+
+@app.post("/api/cleanup_temp")
+async def cleanup_temp(session_id: str = Form(None)):
+    """ Wipes files in /temp_audio associated with session_id, or all files if not specified """
+    try:
+        if not os.path.exists(TEMP_AUDIO_DIR):
+            return {"status": "success", "cleaned": 0}
+            
+        count = 0
+        for f in os.listdir(TEMP_AUDIO_DIR):
+            if session_id is None or f.startswith(session_id):
+                try:
+                    os.remove(os.path.join(TEMP_AUDIO_DIR, f))
+                    count += 1
+                except Exception:
+                    pass
+        return {"status": "success", "cleaned": count}
+    except Exception as e:
         return {"error": str(e)}
 
 @app.post("/transcribe_and_compare")
@@ -552,7 +652,14 @@ async def transcribe_and_compare(
     try:
         audio_bytes = await file.read()
         
-        # Genuine Whisper AI Speech-to-Text Transcription
+        # Save complete recording physically before passing it to the Whisper model
+        sess_id = f"sess_{module_type}_{start_val}_{end_val}"
+        full_filepath = os.path.join(TEMP_AUDIO_DIR, f"{sess_id}_full.wav")
+        with open(full_filepath, "wb") as f:
+            f.write(audio_bytes)
+        print(f"[Full Save] Saved complete session audio to file: {full_filepath}")
+        
+        # Genuine Whisper AI Speech-to-Text Transcription (with CPU float32 / fp16=False optimization)
         user_transcription = await transcribe_audio_file(audio_bytes, expected_text)
         
         orig_words = expected_text.split()
