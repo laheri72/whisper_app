@@ -21,18 +21,27 @@ def init_whisper_model():
             num_threads = min(4, os.cpu_count() or 4)
             torch.set_num_threads(num_threads)
             
+        if settings.HF_TOKEN:
+            os.environ["HF_TOKEN"] = settings.HF_TOKEN
+            
         from transformers import pipeline
         logger.info(f"Loading Accelerated Whisper Model: {settings.WHISPER_MODEL_NAME}...")
         
         # Enable 30s audio chunking and greedy decoding (num_beams=1) to speed up long recitations by 5x
-        pipe = pipeline(
-            "automatic-speech-recognition",
-            model=settings.WHISPER_MODEL_NAME,
-            chunk_length_s=30,
-            stride_length_s=0,
-            return_timestamps=False,
-            generate_kwargs={"num_beams": 1}
-        )
+        pipeline_kwargs = {
+            "task": "automatic-speech-recognition",
+            "model": settings.WHISPER_MODEL_NAME,
+            "chunk_length_s": 30,
+            "stride_length_s": 0,
+            "return_timestamps": False,
+            "ignore_warning": True,
+            "generate_kwargs": {"num_beams": 1}
+        }
+        if settings.HF_TOKEN:
+            pipeline_kwargs["token"] = settings.HF_TOKEN
+
+        pipe = pipeline(**pipeline_kwargs)
+
         
         # Clean generation config to avoid redundant SuppressTokensAtBeginLogitsProcessor warnings
         if hasattr(pipe, 'model') and hasattr(pipe.model, 'generation_config'):

@@ -32,6 +32,11 @@ pyvenv.cfg
 .DS_Store
 *.log
 
+# Environment Variables
+.env
+.env.*
+!.env.example
+
 # Ignore data and audio folders
 data/
 audio/
