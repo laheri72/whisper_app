@@ -11,7 +11,11 @@ from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
-from app.ai_service import init_whisper_model, transcribe_audio_file, compare_recitation, normalize_arabic
+from app.ai_service import (
+    init_whisper_model, transcribe_audio_file, compare_recitation, normalize_arabic,
+    ikhtebaar_sessions, tasmee_sessions, IkhtebaarSession, RecitationSession,
+    trim_to_last_n_seconds, are_words_phonetically_equivalent
+)
 
 app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key="super_secret_academic_key")
@@ -587,6 +591,154 @@ async def generate_ikhtebaar(mode: str, start_val: int, end_val: int, difficulty
     except Exception as e:
         print(f"Ikhtebaar Error: {e}")
         return {"error": str(e)}
+
+async def process_live_recitation_chunk(sess: RecitationSession, new_audio_bytes: bytes):
+    if not sess.rolling_buffer:
+        sess.rolling_buffer = new_audio_bytes
+    else:
+        payload = new_audio_bytes[44:] if len(new_audio_bytes) > 44 else new_audio_bytes
+        sess.rolling_buffer = sess.rolling_buffer + payload
+
+    sess.rolling_buffer = trim_to_last_n_seconds(sess.rolling_buffer, seconds=8.0)
+
+    if sess.confirmed_index >= sess.total_words:
+        correct_cnt = sum(1 for w in sess.word_status if w["status"] in ("correct", "bismillah_skipped"))
+        acc = round((correct_cnt / sess.total_words) * 100, 1) if sess.total_words > 0 else 0.0
+        return {
+            "status": "completed",
+            "confirmed_index": sess.confirmed_index,
+            "total_words": sess.total_words,
+            "newly_confirmed": [],
+            "nudge": False,
+            "word_status": sess.word_status,
+            "accuracy_score": acc
+        }
+
+    upcoming_prompt = sess.get_upcoming_prompt(count=8)
+
+    transcription = await transcribe_audio_file(
+        audio_bytes=sess.rolling_buffer,
+        initial_prompt=upcoming_prompt
+    )
+
+    norm_user_words = normalize_arabic(transcription).split()
+
+    # 1. Bismillah auto-skip check if student starts directly at Ayah 1
+    sess.check_and_apply_bismillah_skip(norm_user_words)
+
+    norm_remainder = sess.norm_expected_words[sess.confirmed_index:]
+    newly_confirmed = []
+
+    if norm_user_words and norm_remainder:
+        matched_count = 0
+        for u_word in norm_user_words:
+            if sess.confirmed_index + matched_count < sess.total_words:
+                exp_word = sess.norm_expected_words[sess.confirmed_index + matched_count]
+                if are_words_phonetically_equivalent(u_word, exp_word):
+                    idx = sess.confirmed_index + matched_count
+                    sess.word_status[idx]["status"] = "correct"
+                    newly_confirmed.append(sess.display_words[idx])
+                    matched_count += 1
+                else:
+                    matcher = difflib.SequenceMatcher(None, norm_remainder, norm_user_words)
+                    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+                        if tag == "equal" and i1 == 0:
+                            n = i2 - i1
+                            for k in range(n):
+                                c_idx = sess.confirmed_index + k
+                                if c_idx < sess.total_words:
+                                    sess.word_status[c_idx]["status"] = "correct"
+                                    newly_confirmed.append(sess.display_words[c_idx])
+                            matched_count = max(matched_count, n)
+                    break
+
+        if matched_count > 0:
+            sess.confirmed_index += matched_count
+            sess.consecutive_misses = 0
+        else:
+            sess.consecutive_misses += 1
+
+    nudge = sess.consecutive_misses >= 3
+
+    correct_cnt = sum(1 for w in sess.word_status if w["status"] in ("correct", "bismillah_skipped"))
+    accuracy = round((correct_cnt / sess.total_words) * 100, 1) if sess.total_words > 0 else 0.0
+
+    return {
+        "status": "success",
+        "transcription": transcription,
+        "newly_confirmed": newly_confirmed,
+        "nudge": nudge,
+        "confirmed_index": sess.confirmed_index,
+        "total_words": sess.total_words,
+        "word_status": sess.word_status,
+        "accuracy_score": accuracy
+    }
+
+def finalize_recitation_session(sess: RecitationSession, session_id: str):
+    for idx in range(sess.confirmed_index, sess.total_words):
+        if sess.word_status[idx]["status"] == "pending":
+            sess.word_status[idx]["status"] = "mistake"
+
+    correct_count = sum(1 for w in sess.word_status if w["status"] in ("correct", "bismillah_skipped"))
+    mistake_count = sess.total_words - correct_count
+    accuracy_score = round((correct_count / sess.total_words) * 100, 1) if sess.total_words > 0 else 0.0
+
+    comparison_payload = [
+        {"word": w["word"], "status": w["status"]} for w in sess.word_status
+    ]
+
+    return {
+        "status": "success",
+        "session_id": session_id,
+        "accuracy_score": accuracy_score,
+        "correct_words_count": correct_count,
+        "mistake_count": mistake_count,
+        "total_words": sess.total_words,
+        "comparison": comparison_payload,
+        "instant_finalized": True
+    }
+
+# ----------------- IKHTEBAAR STATEFUL ENDPOINTS -----------------
+@app.post("/api/ikhtebaar/start_session")
+async def ikhtebaar_start_session(session_id: str = Form(...), expected_text: str = Form(...)):
+    sess = RecitationSession(session_id, expected_text)
+    ikhtebaar_sessions[session_id] = sess
+    return {"status": "success", "session_id": session_id, "total_words": sess.total_words}
+
+@app.post("/api/ikhtebaar/chunk")
+async def ikhtebaar_chunk(session_id: str = Form(...), file: UploadFile = File(...)):
+    if session_id not in ikhtebaar_sessions:
+        return {"error": "Session not found or expired"}
+    audio_bytes = await file.read()
+    return await process_live_recitation_chunk(ikhtebaar_sessions[session_id], audio_bytes)
+
+@app.post("/api/ikhtebaar/conclude_session")
+async def ikhtebaar_conclude_session(session_id: str = Form(...)):
+    if session_id not in ikhtebaar_sessions:
+        return {"error": "Session not found"}
+    sess = ikhtebaar_sessions.pop(session_id)
+    return finalize_recitation_session(sess, session_id)
+
+# ----------------- TASMEE STATEFUL ENDPOINTS -----------------
+@app.post("/api/tasmee/start_session")
+async def tasmee_start_session(session_id: str = Form(...), expected_text: str = Form(...)):
+    sess = RecitationSession(session_id, expected_text)
+    tasmee_sessions[session_id] = sess
+    return {"status": "success", "session_id": session_id, "total_words": sess.total_words}
+
+@app.post("/api/tasmee/chunk")
+async def tasmee_chunk(session_id: str = Form(...), file: UploadFile = File(...)):
+    if session_id not in tasmee_sessions:
+        return {"error": "Session not found or expired"}
+    audio_bytes = await file.read()
+    return await process_live_recitation_chunk(tasmee_sessions[session_id], audio_bytes)
+
+@app.post("/api/tasmee/conclude_session")
+async def tasmee_conclude_session(session_id: str = Form(...)):
+    if session_id not in tasmee_sessions:
+        return {"error": "Session not found"}
+    sess = tasmee_sessions.pop(session_id)
+    return finalize_recitation_session(sess, session_id)
 
 @app.post("/transcribe_chunk")
 async def transcribe_chunk(

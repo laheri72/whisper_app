@@ -56,6 +56,8 @@ export const TasmeeTab = () => {
   const [analysisStage, setAnalysisStage] = useState('');
   const [analyserNode, setAnalyserNode] = useState(null);
   const [gradingError, setGradingError] = useState('');
+  const [nudgeActive, setNudgeActive] = useState(false);
+  const [nudgeText, setNudgeText] = useState('');
 
   const mediaRecorderRef = useRef(null);
   const timerIntervalRef = useRef(null);
@@ -98,12 +100,10 @@ export const TasmeeTab = () => {
       if (e.key === 'Escape') {
         setIsZoomed(false);
       } else if (e.key === 'ArrowLeft') {
-        // Arabic RTL: Left Arrow goes to NEXT page
         if (currentZoomedIndex < zoomedPageList.length - 1) {
           setCurrentZoomedIndex(prev => Math.min(zoomedPageList.length - 1, prev + 1));
         }
       } else if (e.key === 'ArrowRight') {
-        // Arabic RTL: Right Arrow goes to PREVIOUS page
         if (currentZoomedIndex > 0) {
           setCurrentZoomedIndex(prev => Math.max(0, prev - 1));
         }
@@ -130,6 +130,8 @@ export const TasmeeTab = () => {
     setTextError('');
     setEvaluationResult(null);
     setGradingError('');
+    setNudgeActive(false);
+    setNudgeText('');
     updateTasmee({
       activePageIndex: 0,
       whisperCorrections: '',
@@ -179,7 +181,7 @@ export const TasmeeTab = () => {
     }
   };
 
-  // 1. INITIATE RECITATION (Continuous Buffer WAV Chunking Mode)
+  // 1. INITIATE RECITATION (Stateful Live Session Streaming Mode)
   const initiateRecitation = async () => {
     if (!expectedText) {
       alert("Please fetch target recitation text before initiating audio recording.");
@@ -189,14 +191,14 @@ export const TasmeeTab = () => {
     try {
       setIsStartingRecording(true);
 
-      // Clean up previous blob URL to prevent memory leaks
       if (recordedAudioUrl) {
         URL.revokeObjectURL(recordedAudioUrl);
       }
 
       setGradingError('');
+      setNudgeActive(false);
+      setNudgeText('');
 
-      // Clear previous recording buffer/blob state immediately (Overwrite)
       updateTasmee({
         recordedAudioUrl: '',
         recordedAudioBlob: null,
@@ -207,18 +209,19 @@ export const TasmeeTab = () => {
         elapsedSeconds: 0
       });
 
-      // Generate random unique Session ID
       const sessId = 'sess_tasmee_' + Math.random().toString(36).substring(2, 9) + '_' + Date.now();
       sessionIdRef.current = sessId;
       chunkIndexRef.current = 0;
 
-      // Wipe incoming files from any previous chunks
-      await fetch('/api/cleanup_temp', { 
-        method: 'POST', 
-        body: new URLSearchParams({ session_id: sessionIdRef.current }) 
-      }).catch(() => {});
+      // Start server-side stateful session
+      const startFormData = new FormData();
+      startFormData.append('session_id', sessId);
+      startFormData.append('expected_text', expectedText);
+      await fetch('/api/tasmee/start_session', {
+        method: 'POST',
+        body: startFormData
+      });
 
-      // Request microphone access
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -231,84 +234,64 @@ export const TasmeeTab = () => {
       const recorder = new WaveMediaRecorder(stream);
       mediaRecorderRef.current = recorder;
 
-      // Handle 10-second chunks ondataavailable
+      // Incremental live chunk handler (every 4 seconds)
       recorder.ondataavailable = async (e) => {
         if (!e.data || e.data.size === 0) return;
 
         const formData = new FormData();
         formData.append('file', e.data, `chunk_${chunkIndexRef.current}.wav`);
         formData.append('session_id', sessionIdRef.current);
-        formData.append('chunk_index', chunkIndexRef.current);
 
         chunkIndexRef.current += 1;
 
         try {
-          const res = await fetch('/transcribe_chunk', {
+          const res = await fetch('/api/tasmee/chunk', {
             method: 'POST',
             body: formData
           });
           if (res.ok) {
             const data = await res.json();
-            
-            // ADD DEBUGGING LOGS:
-            console.log("Whisper Chunk Response:", data);
+            console.log("Tasmee Live Chunk Response:", data);
 
-            if (data.comparison && Array.isArray(data.comparison)) {
-              updateTasmee(prev => ({
-                transcriptionData: [...prev.transcriptionData, ...data.comparison]
-              }));
-            } else if (data.words && Array.isArray(data.words)) {
-              updateTasmee(prev => ({
-                transcriptionData: [...prev.transcriptionData, ...data.words]
-              }));
-            } else if (Array.isArray(data)) {
-              updateTasmee(prev => ({
-                transcriptionData: [...prev.transcriptionData, ...data]
-              }));
-            } else if (data.transcription) {
-              updateTasmee(prev => ({
-                transcriptionData: [...prev.transcriptionData, { text: data.transcription, isRawString: true }]
-              }));
+            if (data.word_status) {
+              updateTasmee({
+                transcriptionData: data.word_status
+              });
+            }
+
+            if (data.nudge) {
+              setNudgeActive(true);
+              setNudgeText("Take a moment — recite the upcoming word carefully...");
+            } else {
+              setNudgeActive(false);
             }
           }
         } catch (err) {
-          console.warn("Real-time chunk grading failed:", err);
+          console.warn("Live chunk grading failed:", err);
         }
       };
 
-      // Set stopping event handler to collect complete merged recording WAV
+      // Wrap up session instantly on recorder stop
       recorder.onstop = async (finalBlob) => {
         setIsFinalizingStream(false);
         setIsAnalyzing(true);
-        setAnalysisProgress(10);
-        setAnalysisStage("AI is analyzing your recitation, please wait...");
+        setAnalysisProgress(50);
+        setAnalysisStage("Finalizing Recitation Grade Assessment...");
 
-        // Save final blob locally and generate URL for HTML5 Audio player
         const finalUrl = URL.createObjectURL(finalBlob);
         updateTasmee({
           recordedAudioBlob: finalBlob,
           recordedAudioUrl: finalUrl
         });
 
-        // Trigger Final neural grading assessment
-        let currentProg = 15;
-        const progressInterval = setInterval(() => {
-          currentProg += Math.floor(Math.random() * 8) + 5;
-          if (currentProg >= 92) currentProg = 92;
-          setAnalysisProgress(currentProg);
-        }, 300);
-
         try {
           const formData = new FormData();
-          formData.append('file', finalBlob, 'tasmee_recitation.wav');
-          formData.append('expected_text', expectedText);
+          formData.append('session_id', sessionIdRef.current);
 
-          const response = await fetch('/transcribe_and_compare', {
+          const response = await fetch('/api/tasmee/conclude_session', {
             method: 'POST',
             body: formData
           });
-
-          clearInterval(progressInterval);
 
           if (!response.ok) {
             throw new Error(`Server returned HTTP status ${response.status}`);
@@ -317,17 +300,10 @@ export const TasmeeTab = () => {
           const resultData = await response.json();
           setAnalysisProgress(100);
           setAnalysisStage("Recitation Assessment Complete!");
-          await new Promise(r => setTimeout(r, 300));
+          await new Promise(r => setTimeout(r, 200));
           setEvaluationResult(resultData);
 
-          // Wipes temporary audio files on completion
-          fetch('/api/cleanup_temp', { 
-            method: 'POST', 
-            body: new URLSearchParams({ session_id: sessionIdRef.current }) 
-          }).catch(() => {});
-
         } catch (err) {
-          clearInterval(progressInterval);
           console.error("Evaluation error:", err);
           setGradingError("Failed to grade recitation: " + err.message);
         } finally {
@@ -338,8 +314,8 @@ export const TasmeeTab = () => {
         }
       };
 
-      // Start recorder with 10s timeslice (10000ms)
-      recorder.start(10000);
+      // Start recorder with 4-second chunking
+      recorder.start(4000);
       setAnalyserNode(recorder.getAnalyser());
       setIsRecording(true);
 
@@ -876,9 +852,20 @@ export const TasmeeTab = () => {
               </div>
             )}
 
+            {/* Live Muhaffiz Gentle Nudge Banner */}
+            {nudgeActive && (
+              <div className="p-3 rounded-xl bg-amber-950/90 border border-amber-500/60 text-amber-300 text-xs font-bold flex items-center justify-between shadow-gold-glow animate-pulse">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-amber-400 animate-spin-slow" />
+                  <span>{nudgeText || "Take a moment — recite the upcoming word carefully..."}</span>
+                </div>
+                <span className="text-[10px] uppercase bg-amber-900 text-amber-200 px-2.5 py-0.5 rounded-md border border-amber-600 font-extrabold tracking-wider">Muhaffiz Hint</span>
+              </div>
+            )}
+
             {/* Real-time transcription dynamic panel with scroll control and conditional word styling */}
             <div className="p-4 rounded-xl bg-slate-950/85 border border-slate-800 space-y-2">
-              <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">Real-Time Transcription (Whisper AI):</span>
+              <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">Live Recitation Progress (Stateful Mukhtabir Engine):</span>
               <div 
                 ref={correctionsContainerRef}
                 className="max-h-[160px] min-h-[60px] overflow-y-auto pr-1 flex flex-wrap flex-row-reverse justify-start items-center gap-2 text-right leading-relaxed font-arabic text-2xl"
@@ -894,14 +881,25 @@ export const TasmeeTab = () => {
                       );
                     }
                     const isCorrect = item.status === 'match' || item.status === 'correct' || item.correct === true || item.status === 'equal';
+                    const isSkipped = item.status === 'bismillah_skipped';
+                    const isPending = item.status === 'pending';
+                    const isMistake = item.status === 'mistake' || item.status === 'incorrect';
                     const wordText = item.word || item.text || (typeof item === 'string' ? item : JSON.stringify(item));
+                    
+                    let styleClass = "text-slate-500 opacity-60";
+                    if (isCorrect) {
+                      styleClass = "text-emerald-400 font-bold transition-all scale-105";
+                    } else if (isSkipped) {
+                      styleClass = "text-slate-400 italic text-xl border-b border-slate-700/50";
+                    } else if (isMistake) {
+                      styleClass = "text-red-400 line-through decoration-red-600/80 decoration-2 font-bold opacity-80";
+                    }
+
                     return (
                       <span
                         key={idx}
-                        className={isCorrect 
-                          ? "text-emerald-400 font-bold transition-all" 
-                          : "text-red-500 line-through decoration-red-600/70 decoration-2 font-bold animate-pulse"
-                        }
+                        className={styleClass}
+                        title={isSkipped ? "Bismillah skipped (optional opening)" : ""}
                       >
                         {wordText}
                       </span>
