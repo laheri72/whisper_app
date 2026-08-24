@@ -13,15 +13,16 @@ export default defineConfig({
         try {
           const distAssets = path.resolve(__dirname, 'dist/assets');
           const staticAssets = path.resolve(__dirname, 'static/assets');
+          if (fs.existsSync(staticAssets)) {
+            fs.rmSync(staticAssets, { recursive: true, force: true });
+          }
           if (fs.existsSync(distAssets)) {
-            if (!fs.existsSync(staticAssets)) {
-              fs.mkdirSync(staticAssets, { recursive: true });
-            }
+            fs.mkdirSync(staticAssets, { recursive: true });
             const files = fs.readdirSync(distAssets);
             for (const file of files) {
               fs.copyFileSync(path.join(distAssets, file), path.join(staticAssets, file));
             }
-            console.log(' Successfully copied dist/assets to static/assets');
+            console.log(' Successfully cleaned old assets & copied dist/assets to static/assets');
           }
           const distHtml = path.resolve(__dirname, 'dist/index.html');
           const templateHtml = path.resolve(__dirname, 'templates/index.html');
