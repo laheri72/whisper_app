@@ -1,7 +1,10 @@
 import React from 'react';
-import { BookOpen, Mic, Award, Activity, Sparkles, Clock, Globe, Sun, Moon, LogOut } from 'lucide-react';
+import { BookOpen, Mic, Award, Activity, Sparkles, Clock, Globe, Sun, Moon, LogOut, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
+import { useApp } from '../context/AppContext';
 
 export const Header = ({ activeTab, user, theme, toggleTheme, handleLogout }) => {
+  const { isModelReady, modelStatus, modelError } = useApp();
+
   const getTabTitle = () => {
     switch (activeTab) {
       case 'tilawat':
@@ -44,8 +47,34 @@ export const Header = ({ activeTab, user, theme, toggleTheme, handleLogout }) =>
 
       {/* Right Header Status Bar */}
       <div className="flex items-center gap-4">
+        {/* Live AI Whisper Model Status Pill */}
+        <div className={`hidden md:flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-semibold shadow-sm transition-all ${
+          isModelReady
+            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
+            : modelStatus === 'error'
+            ? 'bg-red-500/10 text-red-500 border-red-500/30'
+            : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30 animate-pulse'
+        }`}>
+          {isModelReady ? (
+            <>
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+              <span>Whisper AI Ready</span>
+            </>
+          ) : modelStatus === 'error' ? (
+            <>
+              <AlertCircle className="w-3.5 h-3.5 text-red-500" />
+              <span title={modelError || 'Error loading weights'}>AI Offline</span>
+            </>
+          ) : (
+            <>
+              <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-500" />
+              <span>Loading AI Weights...</span>
+            </>
+          )}
+        </div>
+
         {/* System Time & Connection */}
-        <div className="hidden md:flex items-center gap-3 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 text-xs">
+        <div className="hidden lg:flex items-center gap-3 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 text-xs">
           <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
             <Globe className="w-3.5 h-3.5 text-emerald-500 dark:text-emerald-400" />
             <span>Madani Standard (604 Pages)</span>

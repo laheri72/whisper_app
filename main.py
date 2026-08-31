@@ -14,7 +14,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.ai_service import (
     init_whisper_model, transcribe_audio_file, compare_recitation, normalize_arabic,
     ikhtebaar_sessions, tasmee_sessions, IkhtebaarSession, RecitationSession,
-    trim_to_last_n_seconds, are_words_phonetically_equivalent
+    trim_to_last_n_seconds, are_words_phonetically_equivalent, is_model_ready, get_model_health
 )
 
 app = FastAPI()
@@ -611,7 +611,8 @@ async def process_live_recitation_chunk(sess: RecitationSession, new_audio_bytes
             "newly_confirmed": [],
             "nudge": False,
             "word_status": sess.word_status,
-            "accuracy_score": acc
+            "accuracy_score": acc,
+            "score": int(round(acc))
         }
 
     upcoming_prompt = sess.get_upcoming_prompt(count=8)
@@ -620,6 +621,9 @@ async def process_live_recitation_chunk(sess: RecitationSession, new_audio_bytes
         audio_bytes=sess.rolling_buffer,
         initial_prompt=upcoming_prompt
     )
+
+    if transcription:
+        sess.transcriptions.append(transcription)
 
     norm_user_words = normalize_arabic(transcription).split()
 
@@ -656,6 +660,10 @@ async def process_live_recitation_chunk(sess: RecitationSession, new_audio_bytes
             sess.confirmed_index += matched_count
             sess.consecutive_misses = 0
         else:
+            if is_model_ready():
+                sess.consecutive_misses += 1
+    else:
+        if is_model_ready():
             sess.consecutive_misses += 1
 
     nudge = sess.consecutive_misses >= 3
@@ -671,10 +679,12 @@ async def process_live_recitation_chunk(sess: RecitationSession, new_audio_bytes
         "confirmed_index": sess.confirmed_index,
         "total_words": sess.total_words,
         "word_status": sess.word_status,
-        "accuracy_score": accuracy
+        "accuracy_score": accuracy,
+        "score": int(round(accuracy)),
+        "model_loaded": is_model_ready()
     }
 
-def finalize_recitation_session(sess: RecitationSession, session_id: str):
+def finalize_recitation_session(sess: RecitationSession, session_id: str, request: Request = None):
     for idx in range(sess.confirmed_index, sess.total_words):
         if sess.word_status[idx]["status"] == "pending":
             sess.word_status[idx]["status"] = "mistake"
@@ -684,61 +694,196 @@ def finalize_recitation_session(sess: RecitationSession, session_id: str):
     accuracy_score = round((correct_count / sess.total_words) * 100, 1) if sess.total_words > 0 else 0.0
 
     comparison_payload = [
-        {"word": w["word"], "status": w["status"]} for w in sess.word_status
+        {
+            "word": w["word"],
+            "status": "match" if w["status"] in ("correct", "bismillah_skipped") else "mistake",
+            "raw_status": w["status"]
+        }
+        for w in sess.word_status
     ]
 
-    return {
+    user_transcription = " ".join(sess.transcriptions) if sess.transcriptions else ""
+
+    result = {
         "status": "success",
         "session_id": session_id,
+        "score": int(round(accuracy_score)),
         "accuracy_score": accuracy_score,
         "correct_words_count": correct_count,
+        "matches": correct_count,
         "mistake_count": mistake_count,
+        "mistakes": mistake_count,
         "total_words": sess.total_words,
+        "total": sess.total_words,
+        "user_transcription": user_transcription,
         "comparison": comparison_payload,
         "instant_finalized": True
     }
 
+    # Record analytics in users.db
+    try:
+        username = (request.session.get("user") if request else None) or "guest"
+        conn = sqlite3.connect("users.db")
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO recitation_sessions 
+            (username, module_type, range_mode, start_val, end_val, score, total_words, match_count, mistake_count, transcription)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            username,
+            sess.module_type,
+            sess.range_mode,
+            sess.start_val,
+            sess.end_val,
+            int(round(accuracy_score)),
+            sess.total_words,
+            correct_count,
+            mistake_count,
+            user_transcription
+        ))
+
+        for item in comparison_payload:
+            if item["status"] == "mistake":
+                w_raw = item["word"]
+                w_cleaned = re.sub(r'[\uFD3E\uFD3F0-9\u0660-\u0669\s]+', '', w_raw).strip()
+                w_norm = normalize_arabic(w_cleaned)
+                if w_norm:
+                    cursor.execute("""
+                        INSERT INTO frequent_mistakes (username, word, norm_word, error_count)
+                        VALUES (?, ?, ?, 1)
+                        ON CONFLICT(username, norm_word) DO UPDATE SET
+                            error_count = error_count + 1,
+                            last_missed = CURRENT_TIMESTAMP
+                    """, (username, w_cleaned, w_norm))
+        conn.commit()
+        conn.close()
+    except Exception as db_err:
+        print(f"Recitation analytics log warning: {db_err}")
+
+    return result
+
 # ----------------- IKHTEBAAR STATEFUL ENDPOINTS -----------------
 @app.post("/api/ikhtebaar/start_session")
 async def ikhtebaar_start_session(session_id: str = Form(...), expected_text: str = Form(...)):
-    sess = RecitationSession(session_id, expected_text)
+    if not is_model_ready():
+        return {
+            "status": "error",
+            "error": "AI_MODEL_NOT_READY",
+            "message": "Whisper AI Quran model is currently initializing. Please wait a moment before reciting.",
+            "model_loaded": False
+        }
+    sess = RecitationSession(session_id, expected_text, module_type="ikhtebaar")
     ikhtebaar_sessions[session_id] = sess
-    return {"status": "success", "session_id": session_id, "total_words": sess.total_words}
+    return {
+        "status": "success",
+        "session_id": session_id,
+        "total_words": sess.total_words,
+        "model_loaded": True,
+        "word_status": sess.word_status
+    }
 
 @app.post("/api/ikhtebaar/chunk")
 async def ikhtebaar_chunk(session_id: str = Form(...), file: UploadFile = File(...)):
     if session_id not in ikhtebaar_sessions:
         return {"error": "Session not found or expired"}
+    if not is_model_ready():
+        return {
+            "status": "error",
+            "error": "AI_MODEL_NOT_READY",
+            "message": "Whisper AI model is not ready.",
+            "word_status": ikhtebaar_sessions[session_id].word_status
+        }
     audio_bytes = await file.read()
     return await process_live_recitation_chunk(ikhtebaar_sessions[session_id], audio_bytes)
 
 @app.post("/api/ikhtebaar/conclude_session")
-async def ikhtebaar_conclude_session(session_id: str = Form(...)):
+async def ikhtebaar_conclude_session(request: Request, session_id: str = Form(...)):
     if session_id not in ikhtebaar_sessions:
         return {"error": "Session not found"}
     sess = ikhtebaar_sessions.pop(session_id)
-    return finalize_recitation_session(sess, session_id)
+    return finalize_recitation_session(sess, session_id, request=request)
 
 # ----------------- TASMEE STATEFUL ENDPOINTS -----------------
+@app.get("/api/model_status")
+async def get_model_status():
+    return get_model_health()
+
 @app.post("/api/tasmee/start_session")
-async def tasmee_start_session(session_id: str = Form(...), expected_text: str = Form(...)):
-    sess = RecitationSession(session_id, expected_text)
+async def tasmee_start_session(
+    session_id: str = Form(...),
+    expected_text: str = Form(...),
+    range_mode: str = Form("custom"),
+    start_val: int = Form(1),
+    end_val: int = Form(1)
+):
+    if not is_model_ready():
+        return {
+            "status": "error",
+            "error": "AI_MODEL_NOT_READY",
+            "message": "Whisper AI Quran model is currently initializing. Please wait a moment before reciting.",
+            "model_loaded": False
+        }
+    sess = RecitationSession(
+        session_id=session_id,
+        expected_text=expected_text,
+        module_type="tasmee",
+        range_mode=range_mode,
+        start_val=start_val,
+        end_val=end_val
+    )
     tasmee_sessions[session_id] = sess
-    return {"status": "success", "session_id": session_id, "total_words": sess.total_words}
+    return {
+        "status": "success",
+        "session_id": session_id,
+        "total_words": sess.total_words,
+        "model_loaded": True,
+        "word_status": sess.word_status
+    }
 
 @app.post("/api/tasmee/chunk")
 async def tasmee_chunk(session_id: str = Form(...), file: UploadFile = File(...)):
     if session_id not in tasmee_sessions:
         return {"error": "Session not found or expired"}
+    if not is_model_ready():
+        return {
+            "status": "error",
+            "error": "AI_MODEL_NOT_READY",
+            "message": "Whisper AI model is not ready.",
+            "word_status": tasmee_sessions[session_id].word_status
+        }
     audio_bytes = await file.read()
     return await process_live_recitation_chunk(tasmee_sessions[session_id], audio_bytes)
 
 @app.post("/api/tasmee/conclude_session")
-async def tasmee_conclude_session(session_id: str = Form(...)):
+async def tasmee_conclude_session(request: Request, session_id: str = Form(...)):
     if session_id not in tasmee_sessions:
         return {"error": "Session not found"}
     sess = tasmee_sessions.pop(session_id)
-    return finalize_recitation_session(sess, session_id)
+    return finalize_recitation_session(sess, session_id, request=request)
+
+@app.post("/api/cancel_session")
+async def cancel_session(session_id: str = Form(...), module_type: str = Form("tasmee")):
+    """ Safely aborts and cleans up an in-progress recitation or exam session without writing to users.db """
+    try:
+        tasmee_sessions.pop(session_id, None)
+        ikhtebaar_sessions.pop(session_id, None)
+
+        # Clean up any temporary files recorded for this session
+        cleaned_files = 0
+        if os.path.exists(TEMP_AUDIO_DIR):
+            for f in os.listdir(TEMP_AUDIO_DIR):
+                if f.startswith(session_id):
+                    try:
+                        os.remove(os.path.join(TEMP_AUDIO_DIR, f))
+                        cleaned_files += 1
+                    except Exception:
+                        pass
+
+        print(f"[Session Cancel] Aborted session {session_id}, cleaned {cleaned_files} temp audio chunks.")
+        return {"status": "success", "session_id": session_id, "cleaned_files": cleaned_files}
+    except Exception as e:
+        print(f"[Session Cancel Error] {e}")
+        return {"error": str(e)}
 
 @app.post("/transcribe_chunk")
 async def transcribe_chunk(

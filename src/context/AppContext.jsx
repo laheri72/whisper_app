@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 
 const AppContext = createContext();
 
@@ -6,6 +6,51 @@ export const AppProvider = ({ children }) => {
   // Shared global quran_data.json states
   const [quranData, setQuranData] = useState(null);
   const [loadingJson, setLoadingJson] = useState(false);
+
+  // Model Readiness & Health States
+  const [isModelReady, setIsModelReady] = useState(false);
+  const [modelStatus, setModelStatus] = useState('loading'); // 'loading' | 'ready' | 'error'
+  const [modelName, setModelName] = useState('tarteel-ai/whisper-base-ar-quran');
+  const [modelError, setModelError] = useState('');
+
+  const checkModelStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/model_status');
+      if (res.ok) {
+        const data = await res.json();
+        const ready = Boolean(data.model_loaded);
+        setIsModelReady(ready);
+        setModelStatus(data.status || (ready ? 'ready' : 'loading'));
+        if (data.model_name) setModelName(data.model_name);
+        if (data.error) setModelError(data.error);
+        return ready;
+      }
+    } catch (err) {
+      console.warn("Failed to check model status:", err);
+    }
+    return false;
+  }, []);
+
+  // Poll for model readiness on initial mount until ready
+  useEffect(() => {
+    let interval = null;
+    let isMounted = true;
+
+    const poll = async () => {
+      const ready = await checkModelStatus();
+      if (ready && interval) {
+        clearInterval(interval);
+      }
+    };
+
+    poll();
+    interval = setInterval(poll, 2000);
+
+    return () => {
+      isMounted = false;
+      if (interval) clearInterval(interval);
+    };
+  }, [checkModelStatus]);
 
   const fetchQuranData = async () => {
     if (quranData) return quranData;
@@ -100,6 +145,11 @@ export const AppProvider = ({ children }) => {
       loadingJson,
       fetchQuranData,
       setQuranData,
+      isModelReady,
+      modelStatus,
+      modelName,
+      modelError,
+      checkModelStatus,
       tilawatState,
       updateTilawat,
       tasmeeState,

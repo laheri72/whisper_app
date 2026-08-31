@@ -143,6 +143,50 @@ export class WaveMediaRecorder {
     }
   }
 
+  getCurrentAudioBlob() {
+    let totalSamples = 0;
+    for (const buf of this.fullPcmBuffer) {
+      totalSamples += buf.length;
+    }
+    if (totalSamples === 0) return null;
+
+    const merged = new Float32Array(totalSamples);
+    let offset = 0;
+    for (const buf of this.fullPcmBuffer) {
+      merged.set(buf, offset);
+      offset += buf.length;
+    }
+    return encodeWAV(merged, this.sampleRate);
+  }
+
+  abort() {
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+    }
+
+    this.state = 'inactive';
+    this.onstop = null;
+    this.ondataavailable = null;
+
+    if (this.scriptNode) {
+      this.scriptNode.disconnect();
+      this.scriptNode = null;
+    }
+    if (this.stream) {
+      this.stream.getTracks().forEach(track => track.stop());
+      this.stream = null;
+    }
+
+    this.fullPcmBuffer = [];
+    this.chunkPcmBuffer = [];
+
+    if (this.audioContext && this.audioContext.state !== 'closed') {
+      this.audioContext.close().catch(() => {});
+      this.audioContext = null;
+    }
+  }
+
   getAnalyser() {
     return this.analyser;
   }

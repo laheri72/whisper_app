@@ -4,17 +4,76 @@ import re
 import difflib
 import logging
 import numpy as np
+import scipy.io.wavfile as wavfile
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Global model pipeline
+# Global model pipeline state
 pipe = None
 MODEL_LOADED = False
+MODEL_LOADING_ERROR = ""
+
+def is_model_ready() -> bool:
+    return MODEL_LOADED and pipe is not None
+
+def get_model_health() -> dict:
+    if MODEL_LOADED and pipe is not None:
+        status = "ready"
+    elif MODEL_LOADING_ERROR:
+        status = "error"
+    else:
+        status = "loading"
+        
+    return {
+        "model_loaded": is_model_ready(),
+        "status": status,
+        "model_name": settings.WHISPER_MODEL_NAME,
+        "error": MODEL_LOADING_ERROR
+    }
+
+def decode_audio_bytes_to_numpy(audio_bytes: bytes):
+    """
+    Decodes in-memory WAV audio bytes into a 1D float32 NumPy array and sample rate.
+    Handles mono/stereo and int16/int32/float32 WAV formats without requiring ffmpeg.
+    """
+    if not audio_bytes or len(audio_bytes) < 44:
+        return None, 16000
+    try:
+        sample_rate, data = wavfile.read(io.BytesIO(audio_bytes))
+        if data is None or len(data) == 0:
+            return None, sample_rate
+            
+        # Convert multi-channel (stereo) to mono
+        if data.ndim > 1:
+            data = data.mean(axis=1)
+            
+        # Normalize to float32 range [-1.0, 1.0]
+        if np.issubdtype(data.dtype, np.integer):
+            info = np.iinfo(data.dtype)
+            max_abs = max(abs(info.min), abs(info.max))
+            data = data.astype(np.float32) / float(max_abs)
+        elif np.issubdtype(data.dtype, np.floating):
+            data = data.astype(np.float32)
+            
+        return data, int(sample_rate)
+    except Exception as e:
+        logger.error(f"Error decoding audio bytes to numpy array via scipy: {e}")
+        # Fallback raw PCM decode
+        try:
+            raw_payload = audio_bytes[44:] if (len(audio_bytes) > 44 and audio_bytes[:4] == b'RIFF') else audio_bytes
+            raw_data = np.frombuffer(raw_payload, dtype=np.int16).astype(np.float32) / 32768.0
+            if len(raw_data) > 0:
+                return raw_data, 16000
+        except Exception as fb_err:
+            logger.error(f"Fallback raw PCM decode failed: {fb_err}")
+        return None, 16000
 
 def init_whisper_model():
-    """Initializes the HuggingFace Whisper model pipeline with tuned CPU multi-threading and 30s audio chunking."""
-    global pipe, MODEL_LOADED
+    """Initializes the HuggingFace Whisper model pipeline with tuned CPU multi-threading, warmup pass, and error handling."""
+    global pipe, MODEL_LOADED, MODEL_LOADING_ERROR
+    MODEL_LOADED = False
+    MODEL_LOADING_ERROR = ""
     try:
         import torch
         if hasattr(torch, 'set_num_threads'):
@@ -27,34 +86,37 @@ def init_whisper_model():
         from transformers import pipeline
         logger.info(f"Loading Accelerated Whisper Model: {settings.WHISPER_MODEL_NAME}...")
         
-        # Enable 30s audio chunking and greedy decoding (num_beams=1) to speed up long recitations by 5x
         pipeline_kwargs = {
             "task": "automatic-speech-recognition",
             "model": settings.WHISPER_MODEL_NAME,
-            "chunk_length_s": 30,
-            "stride_length_s": 0,
-            "return_timestamps": False,
-            "ignore_warning": True,
-            "generate_kwargs": {"num_beams": 1}
+            "return_timestamps": False
         }
         if settings.HF_TOKEN:
             pipeline_kwargs["token"] = settings.HF_TOKEN
 
         pipe = pipeline(**pipeline_kwargs)
 
-        
-        # Clean generation config to avoid redundant warnings
+        # Clean generation config on model to avoid deprecation warnings and disable beam search overhead
         if hasattr(pipe, 'model') and hasattr(pipe.model, 'generation_config'):
             pipe.model.generation_config.suppress_tokens = None
             pipe.model.generation_config.begin_suppress_tokens = None
             pipe.model.generation_config.num_beams = 1
+            pipe.model.generation_config.max_new_tokens = 64
+
+        # Pre-inference Dry-Run Warmup (0.2s of silence) to ensure tensor execution graph is warm and ready
+        logger.info("Executing Whisper pre-flight warmup inference pass...")
+        warmup_samples = np.zeros(3200, dtype=np.float32)
+        with torch.inference_mode():
+            _ = pipe({"array": warmup_samples, "sampling_rate": 16000}, generate_kwargs={"max_new_tokens": 5})
 
         MODEL_LOADED = True
-        logger.info("--> Accelerated Whisper Model successfully loaded and ready for genuine STT inference!")
+        MODEL_LOADING_ERROR = ""
+        logger.info("--> Accelerated Whisper Model successfully loaded, warmed up, and ready for genuine STT inference!")
     except Exception as e:
-        logger.error(f"Could not load HuggingFace Whisper model: {e}")
+        logger.error(f"Could not load HuggingFace Whisper model: {e}", exc_info=True)
         pipe = None
         MODEL_LOADED = False
+        MODEL_LOADING_ERROR = str(e)
 
 def normalize_arabic(text: str) -> str:
     """
@@ -152,9 +214,14 @@ import time
 
 class RecitationSession:
     """ Stateful Session Layer for live incremental Tasmee & Ikhtebaar recitation grading. """
-    def __init__(self, session_id: str, expected_text: str):
+    def __init__(self, session_id: str, expected_text: str, module_type: str = "tasmee", range_mode: str = "custom", start_val: int = 1, end_val: int = 1):
         self.session_id = session_id
         self.expected_text = expected_text
+        self.module_type = module_type
+        self.range_mode = range_mode
+        self.start_val = start_val
+        self.end_val = end_val
+        self.transcriptions = []
         
         orig_words = expected_text.split()
         self.display_words = []
@@ -236,17 +303,24 @@ async def transcribe_audio_file(audio_bytes: bytes = None, expected_text: str = 
             logger.info(f"Running accelerated Whisper pipeline on {len(audio_array)} samples at {sampling_rate}Hz...")
             import torch
             with torch.inference_mode():
-                gen_kwargs = {"num_beams": 1}
+                gen_kwargs = {}
                 if initial_prompt and hasattr(pipe, 'tokenizer') and pipe.tokenizer:
                     try:
-                        prompt_ids = pipe.tokenizer.get_prompt_ids(initial_prompt)
-                        gen_kwargs["prompt_ids"] = prompt_ids
-                    except Exception:
-                        pass
+                        prompt_ids = pipe.tokenizer.get_prompt_ids(initial_prompt, return_tensors="pt")
+                        if isinstance(prompt_ids, np.ndarray):
+                            prompt_ids = torch.from_numpy(prompt_ids)
+                        if isinstance(prompt_ids, torch.Tensor):
+                            gen_kwargs["prompt_ids"] = prompt_ids
+                    except Exception as pe:
+                        logger.warning(f"Could not convert prompt_ids to Tensor: {pe}")
+
+                pipe_kwargs = {}
+                if gen_kwargs:
+                    pipe_kwargs["generate_kwargs"] = gen_kwargs
 
                 result = pipe(
                     {"array": audio_array, "sampling_rate": sampling_rate or 16000},
-                    generate_kwargs=gen_kwargs
+                    **pipe_kwargs
                 )
             transcription = result.get("text", "").strip() if isinstance(result, dict) else str(result).strip()
             logger.info(f"Whisper STT Output: '{transcription}'")

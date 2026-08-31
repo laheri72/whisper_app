@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Award, HelpCircle, ChevronDown, ChevronUp, Mic, MicOff, RefreshCw, CheckCircle2, AlertCircle, Sparkles, Zap, Shield, Flame, BookOpen, Pause, Play, Download } from 'lucide-react';
+import { Award, HelpCircle, ChevronDown, ChevronUp, Mic, MicOff, RefreshCw, CheckCircle2, AlertCircle, Sparkles, Zap, Shield, Flame, BookOpen, Pause, Play, Download, X, Trash2, Volume2, RotateCcw } from 'lucide-react';
 import { getJuzPageRange, JUZ_LIST, SURAH_LIST } from '../utils/juzMapping';
 import { WaveMediaRecorder } from '../utils/audioRecorder';
 import { AudioVisualizer } from './AudioVisualizer';
@@ -7,8 +7,10 @@ import { useApp } from '../context/AppContext';
 import { getPageFromManuscript } from '../utils/quranLookup';
 
 export const IkhtebaarTab = () => {
-  const { ikhtebaarState, updateIkhtebaar, quranData, fetchQuranData, loadingJson } = useApp();
+  const { ikhtebaarState, updateIkhtebaar, quranData, fetchQuranData, loadingJson, isModelReady, modelStatus, modelError } = useApp();
   const [showFullPage, setShowFullPage] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
+  const audioPlayerRef = useRef(null);
 
   const handleViewFullPage = async () => {
     setShowFullPage(true);
@@ -68,6 +70,7 @@ export const IkhtebaarTab = () => {
 
   const mediaRecorderRef = useRef(null);
   const timerIntervalRef = useRef(null);
+  const abortControllerRef = useRef(null);
   const correctionsContainerRef = useRef(null);
   const chunkIndexRef = useRef(0);
   const sessionIdRef = useRef('');
@@ -91,11 +94,14 @@ export const IkhtebaarTab = () => {
     }
   }, [selectedJuz, rangeMode]);
 
-  // Clean up timer on unmount
+  // Clean up timer and media stream on unmount
   useEffect(() => {
     return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-      if (mediaRecorderRef.current) mediaRecorderRef.current.stop();
+      if (mediaRecorderRef.current) mediaRecorderRef.current.abort();
     };
   }, []);
 
@@ -201,6 +207,11 @@ export const IkhtebaarTab = () => {
       return;
     }
 
+    if (!isModelReady) {
+      alert("Whisper AI Quran model is currently loading weights into memory. Please wait a moment until the status indicator turns green.");
+      return;
+    }
+
     try {
       setIsStartingRecording(true);
 
@@ -225,15 +236,25 @@ export const IkhtebaarTab = () => {
       const sessId = 'sess_ikhtebaar_' + Math.random().toString(36).substring(2, 9) + '_' + Date.now();
       sessionIdRef.current = sessId;
       chunkIndexRef.current = 0;
+      abortControllerRef.current = new AbortController();
 
       // Start server-side stateful session
       const startFormData = new FormData();
       startFormData.append('session_id', sessId);
       startFormData.append('expected_text', currentQuestion.expected_full_text || '');
-      await fetch('/api/ikhtebaar/start_session', {
+      const startRes = await fetch('/api/ikhtebaar/start_session', {
         method: 'POST',
-        body: startFormData
+        body: startFormData,
+        signal: abortControllerRef.current.signal
       });
+      if (startRes.ok) {
+        const startData = await startRes.json();
+        if (startData.word_status) {
+          updateIkhtebaar({
+            transcriptionData: startData.word_status
+          });
+        }
+      }
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -260,7 +281,8 @@ export const IkhtebaarTab = () => {
         try {
           const res = await fetch('/api/ikhtebaar/chunk', {
             method: 'POST',
-            body: formData
+            body: formData,
+            signal: abortControllerRef.current?.signal
           });
           if (res.ok) {
             const data = await res.json();
@@ -280,7 +302,9 @@ export const IkhtebaarTab = () => {
             }
           }
         } catch (err) {
-          console.warn("Live chunk grading failed:", err);
+          if (err.name !== 'AbortError') {
+            console.warn("Live chunk grading failed:", err);
+          }
         }
       };
 
@@ -303,7 +327,8 @@ export const IkhtebaarTab = () => {
 
           const response = await fetch('/api/ikhtebaar/conclude_session', {
             method: 'POST',
-            body: formData
+            body: formData,
+            signal: abortControllerRef.current?.signal
           });
 
           if (!response.ok) {
@@ -317,8 +342,12 @@ export const IkhtebaarTab = () => {
           setGradeResult(resultData);
 
         } catch (err) {
-          console.error("Evaluation error:", err);
-          setGradingError("Failed to finalize exam: " + err.message);
+          if (err.name === 'AbortError') {
+            console.log("Exam conclusion request aborted.");
+          } else {
+            console.error("Evaluation error:", err);
+            setGradingError("Failed to finalize exam: " + err.message);
+          }
         } finally {
           setIsAnalyzing(false);
           setAnalyserNode(null);
@@ -345,11 +374,18 @@ export const IkhtebaarTab = () => {
     }
   };
 
-  // 2. PAUSE RECITATION
+  // 2. PAUSE RECITATION (Instantly exposes recorded audio for user self-check)
   const pauseRecitation = () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       mediaRecorderRef.current.pause();
-      updateIkhtebaar({ isPaused: true });
+      const currentBlob = mediaRecorderRef.current.getCurrentAudioBlob();
+      if (currentBlob) {
+        if (recordedAudioUrl) URL.revokeObjectURL(recordedAudioUrl);
+        const currentUrl = URL.createObjectURL(currentBlob);
+        updateIkhtebaar({ isPaused: true, recordedAudioUrl: currentUrl, recordedAudioBlob: currentBlob });
+      } else {
+        updateIkhtebaar({ isPaused: true });
+      }
     }
   };
 
@@ -385,15 +421,53 @@ export const IkhtebaarTab = () => {
     }
   };
 
+  // 5. ABORT / DISCARD EXAM RECITATION (Cancels without grading or writing to DB)
+  const abortRecitation = async () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+    }
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.abort();
+    }
+
+    const currentSessId = sessionIdRef.current;
+    if (currentSessId) {
+      const fd = new FormData();
+      fd.append('session_id', currentSessId);
+      fd.append('module_type', 'ikhtebaar');
+      fetch('/api/cancel_session', { method: 'POST', body: fd }).catch(() => {});
+    }
+
+    setIsRecording(false);
+    setIsStartingRecording(false);
+    setIsFinalizingStream(false);
+    setIsAnalyzing(false);
+    setAnalyserNode(null);
+    setGradingError('');
+    setNudgeActive(false);
+    setNudgeText('');
+    
+    updateIkhtebaar({
+      isPaused: false,
+      elapsedSeconds: 0,
+      transcriptionData: [],
+      gradeResult: null
+    });
+  };
+
   const formatTime = (secs) => {
     const m = Math.floor(secs / 60);
     const s = secs % 60;
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
-  const matchCount = gradeResult?.comparison?.filter(c => c.status === 'match').length || 0;
-  const mistakeCount = gradeResult?.comparison?.filter(c => c.status === 'mistake').length || 0;
-  const totalWords = gradeResult?.comparison?.length || 0;
+  const matchCount = gradeResult?.matches ?? gradeResult?.correct_words_count ?? gradeResult?.comparison?.filter(c => c.status === 'match' || c.status === 'correct').length ?? 0;
+  const mistakeCount = gradeResult?.mistakes ?? gradeResult?.mistake_count ?? gradeResult?.comparison?.filter(c => c.status === 'mistake' || c.status === 'incorrect').length ?? 0;
+  const totalWords = gradeResult?.total ?? gradeResult?.total_words ?? gradeResult?.comparison?.length ?? 0;
 
   return (
     <div className="space-y-6 pb-12">
@@ -729,7 +803,16 @@ export const IkhtebaarTab = () => {
                   <span className="text-gold-300 flex items-center gap-1.5">
                     <Sparkles className="w-4 h-4 text-amber-400 animate-spin-slow" /> AI Evaluation Pipeline
                   </span>
-                  <span className="font-mono text-amber-400 font-extrabold">{analysisProgress}%</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-amber-400 font-extrabold">{analysisProgress}%</span>
+                    <button
+                      onClick={abortRecitation}
+                      className="p-1 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 transition-all ml-1"
+                      title="Cancel & Abort AI Grading"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
 
                 <div className="w-full bg-slate-900 h-2.5 rounded-full overflow-hidden border border-slate-800">
@@ -748,33 +831,85 @@ export const IkhtebaarTab = () => {
               <div className="space-y-3">
                 <button
                   onClick={initiateRecitation}
-                  disabled={!currentQuestion}
-                  className="w-full py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-slate-950 font-extrabold text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition-all disabled:opacity-40"
+                  disabled={!currentQuestion || !isModelReady || isStartingRecording}
+                  className={`w-full py-4 rounded-xl font-extrabold text-sm flex items-center justify-center gap-2 transition-all shadow-lg ${
+                    !isModelReady
+                      ? 'bg-amber-950/60 border border-amber-500/30 text-amber-300 cursor-not-allowed opacity-80'
+                      : !currentQuestion
+                      ? 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed opacity-50'
+                      : 'bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-slate-950 shadow-emerald-500/20 active:scale-[0.99]'
+                  }`}
                 >
-                  <Mic className="w-5 h-5" />
-                  <span>Initiate Recitation</span>
+                  {!isModelReady ? (
+                    <>
+                      <RefreshCw className="w-5 h-5 animate-spin text-amber-400" />
+                      <span>AI Model Initializing (Loading Weights)...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Mic className="w-5 h-5" />
+                      <span>Initiate Recitation</span>
+                    </>
+                  )}
                 </button>
 
-                {/* HTML5 Player & Download controls */}
+                {/* Instant Audio Self-Auditing & Playback Controls */}
                 {recordedAudioUrl && (
-                  <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3 animate-fadeIn">
-                    <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">Play Back Recorded Session:</span>
-                    <audio src={recordedAudioUrl} controls className="w-full" />
+                  <div className="p-4 rounded-xl bg-slate-950/90 border border-gold-500/30 space-y-3 animate-fadeIn shadow-lg">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-gold-300 flex items-center gap-1.5">
+                        <Volume2 className="w-3.5 h-3.5 text-amber-400" /> Instant Recitation Audio Playback:
+                      </span>
+                      {/* Playback speed selector */}
+                      <div className="flex items-center gap-1 bg-slate-900 px-1.5 py-0.5 rounded-lg border border-slate-800 text-[10px] font-mono">
+                        {[0.75, 1.0, 1.25].map(spd => (
+                          <button
+                            key={spd}
+                            onClick={() => {
+                              setPlaybackSpeed(spd);
+                              if (audioPlayerRef.current) audioPlayerRef.current.playbackRate = spd;
+                            }}
+                            className={`px-1.5 py-0.5 rounded ${playbackSpeed === spd ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-white'}`}
+                          >
+                            {spd}x
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <audio
+                      ref={audioPlayerRef}
+                      src={recordedAudioUrl}
+                      controls
+                      className="w-full h-10 rounded-lg accent-amber-500"
+                    />
                     
-                    <a
-                      href={recordedAudioUrl}
-                      download="ikhtebaar_recitation.wav"
-                      className="w-full py-2.5 rounded-xl bg-slate-800 border border-slate-700 hover:bg-slate-700 hover:border-gold-500/40 text-gold-300 font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-md"
-                    >
-                      <Download className="w-4 h-4" /> Save Recording
-                    </a>
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={recordedAudioUrl}
+                        download="ikhtebaar_recitation.wav"
+                        className="flex-1 py-2 rounded-xl bg-slate-900 border border-slate-700 hover:bg-slate-800 hover:border-gold-500/40 text-gold-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-sm"
+                      >
+                        <Download className="w-3.5 h-3.5" /> Save Audio
+                      </a>
+                      <button
+                        onClick={() => {
+                          if (recordedAudioUrl) URL.revokeObjectURL(recordedAudioUrl);
+                          updateIkhtebaar({ recordedAudioUrl: '', recordedAudioBlob: null });
+                        }}
+                        className="p-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-red-500/40 text-slate-400 hover:text-red-400 text-xs transition-all"
+                        title="Clear audio player"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
             ) : (
               <div className="space-y-3">
-                {/* Pause/Resume Switch controls */}
-                <div className="flex gap-2">
+                {/* Recording Controls: Pause/Resume + Abort Icon */}
+                <div className="flex gap-2 items-center">
                   {isPaused ? (
                     <button
                       onClick={resumeRecitation}
@@ -787,9 +922,18 @@ export const IkhtebaarTab = () => {
                       onClick={pauseRecitation}
                       className="flex-1 py-3 rounded-xl bg-slate-800 border border-slate-700 hover:bg-slate-700 text-amber-400 font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md"
                     >
-                      <Pause className="w-4 h-4" /> Pause Stream
+                      <Pause className="w-4 h-4" /> Pause & Check Audio
                     </button>
                   )}
+
+                  {/* Immediate Abort/Discard Icon Button */}
+                  <button
+                    onClick={abortRecitation}
+                    className="p-3 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 hover:border-red-500/60 transition-all flex items-center justify-center shadow-md shrink-0"
+                    title="Discard Exam Recitation (Cancel without grading)"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
                 </div>
 
                 <button
@@ -799,6 +943,16 @@ export const IkhtebaarTab = () => {
                   <MicOff className="w-5 h-5" />
                   <span>Conclude Recitation & Grade Exam</span>
                 </button>
+
+                {/* Instant Audio Snapshot on Pause */}
+                {isPaused && recordedAudioUrl && (
+                  <div className="p-3 rounded-xl bg-slate-950/90 border border-amber-500/40 space-y-2 animate-fadeIn">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1">
+                      <Volume2 className="w-3 h-3" /> Live Audio Preview (Check Voice Clarity):
+                    </span>
+                    <audio src={recordedAudioUrl} controls className="w-full h-8 accent-amber-500" />
+                  </div>
+                )}
               </div>
             )}
 
@@ -823,47 +977,70 @@ export const IkhtebaarTab = () => {
 
             {/* Real-time transcription dynamic panel with scroll control and conditional word styling */}
             <div className="p-4 rounded-xl bg-slate-950/85 border border-slate-800 space-y-2">
-              <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">Live Recitation Progress (Stateful Mukhtabir Engine):</span>
+              <div className="flex items-center justify-between">
+                <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                  Live Recitation Progress (Stateful Mukhtabir Engine):
+                </span>
+                <span className="text-gold-400 font-arabic text-sm" dir="rtl">متابعة التسميع المباشر</span>
+              </div>
               <div 
                 ref={correctionsContainerRef}
-                className="max-h-[160px] min-h-[60px] overflow-y-auto pr-1 flex flex-wrap flex-row-reverse justify-start items-center gap-2 text-right leading-relaxed font-arabic text-2xl"
                 dir="rtl"
+                className="max-h-[170px] min-h-[65px] overflow-y-auto p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 text-right leading-[2.5] font-arabic text-2xl select-text shadow-inner"
               >
-                {transcriptionData && transcriptionData.length > 0 ? (
-                  transcriptionData.map((item, idx) => {
-                    if (item.isRawString) {
+                {(() => {
+                  const verifiedWords = (transcriptionData || []).filter(
+                    item => item.isRawString || (item.status && item.status !== 'pending')
+                  );
+
+                  if (verifiedWords.length > 0) {
+                    return verifiedWords.map((item, idx) => {
+                      if (item.isRawString) {
+                        return (
+                          <span key={idx} className="inline-block mx-1 my-0.5 text-amber-200/90 font-medium">
+                            {item.text}
+                          </span>
+                        );
+                      }
+                      const isCorrect = item.status === 'match' || item.status === 'correct' || item.correct === true || item.status === 'equal';
+                      const isSkipped = item.status === 'bismillah_skipped';
+                      const isMistake = item.status === 'mistake' || item.status === 'incorrect';
+                      const wordText = item.word || item.text || (typeof item === 'string' ? item : JSON.stringify(item));
+                      
+                      let styleClass = "text-slate-400";
+                      if (isCorrect) {
+                        styleClass = "text-emerald-400 font-bold bg-emerald-950/50 border border-emerald-500/40 px-2 py-0.5 rounded-lg shadow-sm";
+                      } else if (isSkipped) {
+                        styleClass = "text-slate-400 italic text-xl border-b border-slate-700/60 bg-slate-900/40 px-1.5 py-0.5 rounded";
+                      } else if (isMistake) {
+                        styleClass = "text-red-400 line-through decoration-red-500/80 decoration-2 font-bold bg-red-950/50 border border-red-500/40 px-2 py-0.5 rounded-lg";
+                      }
+
                       return (
-                        <span key={idx} className="text-amber-200/90 font-medium">
-                          {item.text}
+                        <span
+                          key={idx}
+                          className={`inline-block mx-1 my-0.5 transition-all duration-200 ${styleClass}`}
+                          title={isSkipped ? "Bismillah skipped (optional opening)" : isCorrect ? "Recited correctly" : isMistake ? "Recitation mistake" : ""}
+                        >
+                          {wordText}
                         </span>
                       );
-                    }
-                    const isCorrect = item.status === 'match' || item.status === 'correct' || item.correct === true || item.status === 'equal';
-                    const isPending = item.status === 'pending';
-                    const isMistake = item.status === 'mistake' || item.status === 'incorrect';
-                    const wordText = item.word || item.text || (typeof item === 'string' ? item : JSON.stringify(item));
-                    
-                    let styleClass = "text-slate-500 opacity-60";
-                    if (isCorrect) {
-                      styleClass = "text-emerald-400 font-bold transition-all scale-105";
-                    } else if (isMistake) {
-                      styleClass = "text-red-400 line-through decoration-red-600/80 decoration-2 font-bold opacity-80";
-                    }
+                    });
+                  }
 
-                    return (
-                      <span
-                        key={idx}
-                        className={styleClass}
-                      >
-                        {wordText}
-                      </span>
-                    );
-                  })
-                ) : (
-                  <div className="w-full text-center text-slate-600 font-mono text-sm tracking-widest py-2">
-                    - - - - - - - -
-                  </div>
-                )}
+                  return (
+                    <div className="w-full text-center text-slate-500 font-sans text-xs py-3.5 tracking-wide">
+                      {isRecording ? (
+                        <span className="flex items-center justify-center gap-2 text-amber-400 animate-pulse">
+                          <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                          Listening to recitation... Recite clearly in Arabic
+                        </span>
+                      ) : (
+                        "Awaiting recitation start..."
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           </div>
@@ -876,15 +1053,15 @@ export const IkhtebaarTab = () => {
           <div className="flex flex-wrap items-center justify-between gap-6 border-b border-slate-800 pb-5">
             <div className="flex items-center gap-4">
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-slate-950 font-extrabold text-2xl flex items-center justify-center shadow-gold-glow">
-                {gradeResult.score}%
+                {gradeResult.score ?? gradeResult.accuracy_score ?? 0}%
               </div>
               <div>
                 <div className="flex items-center gap-2">
                   <h3 className="text-lg font-bold text-slate-100">Oral Examination Score</h3>
                   <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                    gradeResult.score >= 80 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                    (gradeResult.score ?? gradeResult.accuracy_score ?? 0) >= 80 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                   }`}>
-                    {gradeResult.score >= 85 ? 'Passed - Mastered' : gradeResult.score >= 70 ? 'Passed - Needs Revision' : 'Needs Practice'}
+                    {(gradeResult.score ?? gradeResult.accuracy_score ?? 0) >= 85 ? 'Passed - Mastered' : (gradeResult.score ?? gradeResult.accuracy_score ?? 0) >= 70 ? 'Passed - Needs Revision' : 'Needs Practice'}
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 mt-1">
@@ -922,9 +1099,12 @@ export const IkhtebaarTab = () => {
               <span className="text-gold-400 font-arabic text-sm">التدقيق الحرفي</span>
             </h4>
 
-            <div className="p-6 rounded-2xl bg-slate-950 border border-slate-800 flex flex-wrap flex-row-reverse gap-3 text-right leading-loose font-arabic text-2xl">
+            <div 
+              dir="rtl"
+              className="p-6 rounded-2xl bg-slate-950 border border-slate-800 flex flex-wrap justify-start gap-3 text-right leading-loose font-arabic text-2xl"
+            >
               {gradeResult.comparison?.map((item, idx) => {
-                const isMatch = item.status === 'match';
+                const isMatch = item.status === 'match' || item.status === 'correct' || item.status === 'bismillah_skipped';
                 return (
                   <span
                     key={idx}
