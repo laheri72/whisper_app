@@ -268,9 +268,10 @@ export const IkhtebaarTab = () => {
       const recorder = new WaveMediaRecorder(stream);
       mediaRecorderRef.current = recorder;
 
-      // Incremental live chunk handler (every 4 seconds)
-      recorder.ondataavailable = async (e) => {
-        if (!e.data || e.data.size === 0) return;
+      // Incremental live chunk handler (every 6 seconds — aligned to server's 6s rolling buffer cap)
+      // IMPORTANT: Returns the fetch Promise so WaveMediaRecorder's mutex releases on server response.
+      recorder.ondataavailable = (e) => {
+        if (!e.data || e.data.size === 0) return Promise.resolve();
 
         const formData = new FormData();
         formData.append('file', e.data, `chunk_${chunkIndexRef.current}.wav`);
@@ -278,12 +279,12 @@ export const IkhtebaarTab = () => {
 
         chunkIndexRef.current += 1;
 
-        try {
-          const res = await fetch('/api/ikhtebaar/chunk', {
-            method: 'POST',
-            body: formData,
-            signal: abortControllerRef.current?.signal
-          });
+        // Return the Promise — critical for mutex release in WaveMediaRecorder.flushChunk()
+        return fetch('/api/ikhtebaar/chunk', {
+          method: 'POST',
+          body: formData,
+          signal: abortControllerRef.current?.signal
+        }).then(async (res) => {
           if (res.ok) {
             const data = await res.json();
             console.log("Ikhtebaar Live Chunk Response:", data);
@@ -301,11 +302,11 @@ export const IkhtebaarTab = () => {
               setNudgeActive(false);
             }
           }
-        } catch (err) {
+        }).catch((err) => {
           if (err.name !== 'AbortError') {
             console.warn("Live chunk grading failed:", err);
           }
-        }
+        });
       };
 
       // Wrap up session instantly on recorder stop
@@ -324,6 +325,9 @@ export const IkhtebaarTab = () => {
         try {
           const formData = new FormData();
           formData.append('session_id', sessionIdRef.current);
+          // Send the complete audio so the backend can run a final full-audio Whisper
+          // sweep to confirm any words the rolling chunks missed before grading.
+          formData.append('file', finalBlob, 'full_exam.wav');
 
           const response = await fetch('/api/ikhtebaar/conclude_session', {
             method: 'POST',
@@ -356,8 +360,8 @@ export const IkhtebaarTab = () => {
         }
       };
 
-      // Start recorder with 4-second chunking
-      recorder.start(4000);
+      // Start recorder with 6-second chunking (aligned to server 6s rolling buffer cap)
+      recorder.start(6000);
       setAnalyserNode(recorder.getAnalyser());
       setIsRecording(true);
 

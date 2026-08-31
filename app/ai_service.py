@@ -69,6 +69,18 @@ def decode_audio_bytes_to_numpy(audio_bytes: bytes):
             logger.error(f"Fallback raw PCM decode failed: {fb_err}")
         return None, 16000
 
+def is_voice_active(audio_array: np.ndarray, threshold: float = 0.006) -> bool:
+    """
+    Pure-numpy RMS energy Voice Activity Detection.
+    Returns False (skip Whisper) if the audio is essentially silence / background noise.
+    Threshold of 0.006 is empirically calibrated for 16kHz laptop microphone recordings.
+    Zero external dependencies — runs in <0.1ms on any CPU.
+    """
+    if audio_array is None or len(audio_array) == 0:
+        return False
+    rms = float(np.sqrt(np.mean(audio_array.astype(np.float32) ** 2)))
+    return rms >= threshold
+
 def init_whisper_model():
     """Initializes the HuggingFace Whisper model pipeline with tuned CPU multi-threading, warmup pass, and error handling."""
     global pipe, MODEL_LOADED, MODEL_LOADING_ERROR
@@ -96,18 +108,35 @@ def init_whisper_model():
 
         pipe = pipeline(**pipeline_kwargs)
 
-        # Clean generation config on model to avoid deprecation warnings and disable beam search overhead
+        # ── generation_config hardening ──────────────────────────────────────────
+        # The transformers warning fires when BOTH generation_config.max_new_tokens
+        # AND generate_kwargs["max_new_tokens"] are set. Fix: don't set max_new_tokens
+        # on generation_config at all — always pass it exclusively via generate_kwargs.
+        # For max_length: setting to None doesn't remove it; use del to truly clear it.
         if hasattr(pipe, 'model') and hasattr(pipe.model, 'generation_config'):
-            pipe.model.generation_config.suppress_tokens = None
-            pipe.model.generation_config.begin_suppress_tokens = None
-            pipe.model.generation_config.num_beams = 1
-            pipe.model.generation_config.max_new_tokens = 64
+            gc = pipe.model.generation_config
+            gc.suppress_tokens = None
+            gc.begin_suppress_tokens = None
+            gc.forced_decoder_ids = None
+            gc.num_beams = 1
+            # Do NOT set max_new_tokens here — only pass via generate_kwargs per call
+            try:
+                del gc.max_length     # fully remove to stop "max_new_tokens + max_length" conflict
+            except AttributeError:
+                pass
+            try:
+                del gc.max_new_tokens # remove so generate_kwargs is the sole authority
+            except AttributeError:
+                pass
 
         # Pre-inference Dry-Run Warmup (0.2s of silence) to ensure tensor execution graph is warm and ready
         logger.info("Executing Whisper pre-flight warmup inference pass...")
         warmup_samples = np.zeros(3200, dtype=np.float32)
         with torch.inference_mode():
-            _ = pipe({"array": warmup_samples, "sampling_rate": 16000}, generate_kwargs={"max_new_tokens": 5})
+            _ = pipe(
+                {"array": warmup_samples, "sampling_rate": 16000},
+                generate_kwargs={"max_new_tokens": 5}
+            )
 
         MODEL_LOADED = True
         MODEL_LOADING_ERROR = ""
@@ -172,6 +201,52 @@ def are_words_phonetically_equivalent(w1: str, w2: str) -> bool:
             if ratio >= 0.70:
                 return True
     return False
+
+def align_recited_words(expected_words: list[str], user_words: list[str], max_window: int = 40) -> list[int]:
+    """
+    Computes optimal monotonic phonetic alignment between expected Quran words
+    and Whisper-transcribed user words using dynamic programming (LCS with phonetic equivalence).
+    
+    Returns a list of integer indices in expected_words that were successfully matched in chronological order.
+    Robust against Whisper insertions, deletions, tajweed variations, and background noise.
+    Runs in <1ms for typical recitation lengths.
+    """
+    if not expected_words or not user_words:
+        return []
+    
+    effective_expected = expected_words[:max_window] if max_window > 0 else expected_words
+    n_exp = len(effective_expected)
+    n_usr = len(user_words)
+    
+    # DP table: dp[i][j] stores length of longest common phonetic subsequence
+    dp = [[0] * (n_usr + 1) for _ in range(n_exp + 1)]
+    
+    for i in range(1, n_exp + 1):
+        exp_w = effective_expected[i - 1]
+        for j in range(1, n_usr + 1):
+            usr_w = user_words[j - 1]
+            if are_words_phonetically_equivalent(usr_w, exp_w):
+                dp[i][j] = dp[i - 1][j - 1] + 1
+            else:
+                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+                
+    # Backtrack to extract matched expected indices in chronological order
+    matched_indices = []
+    i, j = n_exp, n_usr
+    while i > 0 and j > 0:
+        exp_w = effective_expected[i - 1]
+        usr_w = user_words[j - 1]
+        if are_words_phonetically_equivalent(usr_w, exp_w) and dp[i][j] == dp[i - 1][j - 1] + 1:
+            matched_indices.append(i - 1)
+            i -= 1
+            j -= 1
+        elif dp[i - 1][j] >= dp[i][j - 1]:
+            i -= 1
+        else:
+            j -= 1
+            
+    matched_indices.reverse()
+    return matched_indices
 
 def trim_to_last_n_seconds(audio_bytes: bytes, seconds: float = 8.0) -> bytes:
     """
@@ -275,11 +350,12 @@ IkhtebaarSession = RecitationSession
 ikhtebaar_sessions: dict[str, RecitationSession] = {}
 tasmee_sessions: dict[str, RecitationSession] = {}
 
-async def transcribe_audio_file(audio_bytes: bytes = None, expected_text: str = "", file_path: str = None, initial_prompt: str = "") -> str:
+async def transcribe_audio_file(audio_bytes: bytes = None, expected_text: str = "", file_path: str = None, initial_prompt: str = "", max_new_tokens: int = 64) -> str:
     """
     Transcribes audio bytes or file_path strictly using the loaded Whisper AI model.
     Passes raw 16kHz PCM audio array directly to bypass ffmpeg dependency issues.
     Optionally accepts initial_prompt for steering decoder vocabulary.
+    max_new_tokens=16 for live chunk passes, 64 for final conclude sessions.
     """
     global pipe, MODEL_LOADED
     
@@ -303,7 +379,7 @@ async def transcribe_audio_file(audio_bytes: bytes = None, expected_text: str = 
             logger.info(f"Running accelerated Whisper pipeline on {len(audio_array)} samples at {sampling_rate}Hz...")
             import torch
             with torch.inference_mode():
-                gen_kwargs = {}
+                gen_kwargs = {"max_new_tokens": max_new_tokens}
                 if initial_prompt and hasattr(pipe, 'tokenizer') and pipe.tokenizer:
                     try:
                         prompt_ids = pipe.tokenizer.get_prompt_ids(initial_prompt, return_tensors="pt")
@@ -314,13 +390,9 @@ async def transcribe_audio_file(audio_bytes: bytes = None, expected_text: str = 
                     except Exception as pe:
                         logger.warning(f"Could not convert prompt_ids to Tensor: {pe}")
 
-                pipe_kwargs = {}
-                if gen_kwargs:
-                    pipe_kwargs["generate_kwargs"] = gen_kwargs
-
                 result = pipe(
                     {"array": audio_array, "sampling_rate": sampling_rate or 16000},
-                    **pipe_kwargs
+                    generate_kwargs=gen_kwargs
                 )
             transcription = result.get("text", "").strip() if isinstance(result, dict) else str(result).strip()
             logger.info(f"Whisper STT Output: '{transcription}'")

@@ -17,6 +17,11 @@ export class WaveMediaRecorder {
     this.onstop = null;
     this.intervalId = null;
     this.sampleRate = 16000; // Force 16kHz sample rate for Whisper AI
+
+    // ── Resilience: single-in-flight chunk mutex ──────────────────────────────
+    // Prevents parallel HTTP chunk uploads when the server is still computing.
+    // While locked, PCM samples continue accumulating so no audio is ever lost.
+    this.isFlushLocked = false;
   }
 
   start(timeslice = 10000) {
@@ -71,6 +76,16 @@ export class WaveMediaRecorder {
   flushChunk() {
     if (this.chunkPcmBuffer.length === 0) return;
 
+    // ── Resilience Guard 1: Single-in-flight mutex ────────────────────────────
+    // If the server is still processing the previous chunk, skip this flush tick.
+    // The PCM samples that already accumulated in chunkPcmBuffer are NOT cleared —
+    // they will be included in the NEXT flush when the server becomes free.
+    if (this.isFlushLocked) {
+      console.debug('[WaveMediaRecorder] Chunk upload in progress — skipping this tick, audio buffered.');
+      return;
+    }
+
+    // Merge all buffered PCM frames into one contiguous Float32 array
     let totalSamples = 0;
     for (const buf of this.chunkPcmBuffer) {
       totalSamples += buf.length;
@@ -83,10 +98,31 @@ export class WaveMediaRecorder {
       offset += buf.length;
     }
 
+    // ── Resilience Guard 2: Client-side RMS silence gate ─────────────────────
+    // Compute signal energy. If RMS < 0.003 this is background noise / breathing.
+    // Threshold lowered to 0.003 to match server VAD and avoid dropping quiet mics.
+    const sumOfSquares = merged.reduce((acc, s) => acc + s * s, 0);
+    const rms = Math.sqrt(sumOfSquares / merged.length);
+    if (rms < 0.003) {
+      this.chunkPcmBuffer = [];
+      console.debug(`[WaveMediaRecorder] Silence gate: RMS=${rms.toFixed(4)} < 0.003 — skipping silent chunk upload.`);
+      return;
+    }
+
     this.chunkPcmBuffer = [];
     const wavBlob = encodeWAV(merged, this.sampleRate);
     if (this.ondataavailable) {
-      this.ondataavailable({ data: wavBlob });
+      this.isFlushLocked = true;
+      // Wrap ondataavailable in a Promise chain so the mutex is released in .finally()
+      // The caller (TasmeeTab / IkhtebaarTab) must return a Promise from ondataavailable
+      // for the lock to release correctly. For backward compat, we also handle sync callers.
+      const result = this.ondataavailable({ data: wavBlob });
+      if (result && typeof result.finally === 'function') {
+        result.finally(() => { this.isFlushLocked = false; });
+      } else {
+        // Sync caller — release lock after a short delay to avoid same-tick re-entry
+        setTimeout(() => { this.isFlushLocked = false; }, 50);
+      }
     }
   }
 

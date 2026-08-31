@@ -6,6 +6,9 @@ import random
 import difflib
 import re
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 from fastapi import FastAPI, Request, Form, UploadFile, File, Response, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
@@ -14,7 +17,8 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.ai_service import (
     init_whisper_model, transcribe_audio_file, compare_recitation, normalize_arabic,
     ikhtebaar_sessions, tasmee_sessions, IkhtebaarSession, RecitationSession,
-    trim_to_last_n_seconds, are_words_phonetically_equivalent, is_model_ready, get_model_health
+    trim_to_last_n_seconds, are_words_phonetically_equivalent, is_model_ready, get_model_health,
+    decode_audio_bytes_to_numpy, is_voice_active, align_recited_words
 )
 
 app = FastAPI()
@@ -593,13 +597,16 @@ async def generate_ikhtebaar(mode: str, start_val: int, end_val: int, difficulty
         return {"error": str(e)}
 
 async def process_live_recitation_chunk(sess: RecitationSession, new_audio_bytes: bytes):
+    # ── Step 1: Merge incoming chunk into rolling buffer ──────────────────────
     if not sess.rolling_buffer:
         sess.rolling_buffer = new_audio_bytes
     else:
         payload = new_audio_bytes[44:] if len(new_audio_bytes) > 44 else new_audio_bytes
         sess.rolling_buffer = sess.rolling_buffer + payload
 
-    sess.rolling_buffer = trim_to_last_n_seconds(sess.rolling_buffer, seconds=8.0)
+    # ── Step 2: Hard-cap rolling buffer to last 6.0 seconds (96,000 samples @ 16kHz × 2 bytes = 192,000 bytes PCM)
+    # This keeps Whisper inference time constant regardless of session length.
+    sess.rolling_buffer = trim_to_last_n_seconds(sess.rolling_buffer, seconds=6.0)
 
     if sess.confirmed_index >= sess.total_words:
         correct_cnt = sum(1 for w in sess.word_status if w["status"] in ("correct", "bismillah_skipped"))
@@ -617,9 +624,37 @@ async def process_live_recitation_chunk(sess: RecitationSession, new_audio_bytes
 
     upcoming_prompt = sess.get_upcoming_prompt(count=8)
 
+    # ── Step 3: RMS Voice Activity Detection ─────────────────────────────────
+    # Decode audio to check energy BEFORE dispatching to Whisper.
+    # If the buffer is essentially silence (breathing, room noise, thinking pause),
+    # skip the Whisper call entirely — zero CPU cost, zero hallucination risk.
+    test_array, _ = decode_audio_bytes_to_numpy(sess.rolling_buffer)
+    if test_array is None or not is_voice_active(test_array, threshold=0.003):
+        logger.info(f"[VAD] Session {sess.session_id}: Silence detected in rolling buffer — skipping Whisper inference.")
+        return {
+            "status": "silence",
+            "transcription": "",
+            "newly_confirmed": [],
+            "nudge": False,
+            "confirmed_index": sess.confirmed_index,
+            "total_words": sess.total_words,
+            "word_status": sess.word_status,
+            "accuracy_score": round(
+                sum(1 for w in sess.word_status if w["status"] in ("correct", "bismillah_skipped")) / sess.total_words * 100, 1
+            ) if sess.total_words > 0 else 0.0,
+            "score": 0,
+            "model_loaded": is_model_ready()
+        }
+
+    # ── Step 4: Whisper Inference with ALREADY-SAID context prompt ───────────
+    # Passing the last few CONFIRMED words provides natural conversational context.
+    already_said_start = max(0, sess.confirmed_index - 6)
+    already_said_prompt = " ".join(sess.display_words[already_said_start:sess.confirmed_index])
+
     transcription = await transcribe_audio_file(
         audio_bytes=sess.rolling_buffer,
-        initial_prompt=upcoming_prompt
+        initial_prompt=already_said_prompt,
+        max_new_tokens=48
     )
 
     if transcription:
@@ -634,30 +669,20 @@ async def process_live_recitation_chunk(sess: RecitationSession, new_audio_bytes
     newly_confirmed = []
 
     if norm_user_words and norm_remainder:
-        matched_count = 0
-        for u_word in norm_user_words:
-            if sess.confirmed_index + matched_count < sess.total_words:
-                exp_word = sess.norm_expected_words[sess.confirmed_index + matched_count]
-                if are_words_phonetically_equivalent(u_word, exp_word):
-                    idx = sess.confirmed_index + matched_count
-                    sess.word_status[idx]["status"] = "correct"
-                    newly_confirmed.append(sess.display_words[idx])
-                    matched_count += 1
-                else:
-                    matcher = difflib.SequenceMatcher(None, norm_remainder, norm_user_words)
-                    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-                        if tag == "equal" and i1 == 0:
-                            n = i2 - i1
-                            for k in range(n):
-                                c_idx = sess.confirmed_index + k
-                                if c_idx < sess.total_words:
-                                    sess.word_status[c_idx]["status"] = "correct"
-                                    newly_confirmed.append(sess.display_words[c_idx])
-                            matched_count = max(matched_count, n)
-                    break
-
-        if matched_count > 0:
-            sess.confirmed_index += matched_count
+        # Dynamic programming phonetic alignment (LCS) — matches words monotonically
+        # even with Whisper hallucinations, insertions, phonetic shifts, or noise
+        matched_indices = align_recited_words(norm_remainder, norm_user_words, max_window=30)
+        
+        if matched_indices:
+            for rel_idx in matched_indices:
+                abs_idx = sess.confirmed_index + rel_idx
+                if abs_idx < sess.total_words:
+                    if sess.word_status[abs_idx]["status"] not in ("correct", "bismillah_skipped"):
+                        sess.word_status[abs_idx]["status"] = "correct"
+                        newly_confirmed.append(sess.display_words[abs_idx])
+            
+            furthest_idx = matched_indices[-1]
+            sess.confirmed_index = min(sess.total_words, sess.confirmed_index + furthest_idx + 1)
             sess.consecutive_misses = 0
         else:
             if is_model_ready():
@@ -685,7 +710,8 @@ async def process_live_recitation_chunk(sess: RecitationSession, new_audio_bytes
     }
 
 def finalize_recitation_session(sess: RecitationSession, session_id: str, request: Request = None):
-    for idx in range(sess.confirmed_index, sess.total_words):
+    # Any word not yet verified as correct or skipped is marked as a mistake
+    for idx in range(sess.total_words):
         if sess.word_status[idx]["status"] == "pending":
             sess.word_status[idx]["status"] = "mistake"
 
@@ -796,11 +822,73 @@ async def ikhtebaar_chunk(session_id: str = Form(...), file: UploadFile = File(.
     audio_bytes = await file.read()
     return await process_live_recitation_chunk(ikhtebaar_sessions[session_id], audio_bytes)
 
+async def final_audio_sweep(sess: RecitationSession, final_audio_bytes: bytes):
+    """
+    Performs one final full-audio Whisper transcription pass over the entire recitation.
+    This safety net guarantees that conclude_session grading reflects the COMPLETE recording,
+    recovering any words that rolling 6s chunks missed or cut off.
+    """
+    if not final_audio_bytes or len(final_audio_bytes) < 44:
+        return
+
+    # Decode to check voice activity — skip if the final blob is silence/noise
+    test_array, _ = decode_audio_bytes_to_numpy(final_audio_bytes)
+    if test_array is None or not is_voice_active(test_array, threshold=0.003):
+        logger.info(f"[FinalSweep] Session {sess.session_id}: final audio is silent — skipping final Whisper pass.")
+        return
+
+    logger.info(f"[FinalSweep] Session {sess.session_id}: Running final full-audio Whisper pass. (Current confirmed_index={sess.confirmed_index}/{sess.total_words})")
+
+    try:
+        final_transcription = await transcribe_audio_file(
+            audio_bytes=final_audio_bytes,
+            initial_prompt="",  # Full audio starts from beginning, no prompt bias needed
+            max_new_tokens=256  # Allows full decode of long recitations / full pages
+        )
+    except Exception as e:
+        logger.error(f"[FinalSweep] Whisper error: {e}")
+        return
+
+    if not final_transcription:
+        return
+
+    sess.transcriptions.append(final_transcription)
+    norm_user_words = normalize_arabic(final_transcription).split()
+    logger.info(f"[FinalSweep] Final transcription: '{final_transcription}'")
+
+    if not norm_user_words:
+        return
+
+    # Bismillah auto-skip check if student started directly at Ayah 1
+    sess.check_and_apply_bismillah_skip(norm_user_words)
+
+    # Monotonic DP alignment across the entire target text
+    matched_indices = align_recited_words(sess.norm_expected_words, norm_user_words, max_window=0)
+
+    if matched_indices:
+        for idx in matched_indices:
+            if idx < sess.total_words:
+                sess.word_status[idx]["status"] = "correct"
+        
+        furthest_idx = matched_indices[-1]
+        sess.confirmed_index = max(sess.confirmed_index, min(sess.total_words, furthest_idx + 1))
+        logger.info(f"[FinalSweep] Confirmed {len(matched_indices)} total matching words. Final confirmed_index={sess.confirmed_index}/{sess.total_words}")
+
+
 @app.post("/api/ikhtebaar/conclude_session")
-async def ikhtebaar_conclude_session(request: Request, session_id: str = Form(...)):
+async def ikhtebaar_conclude_session(request: Request, session_id: str = Form(...), file: UploadFile = File(None)):
     if session_id not in ikhtebaar_sessions:
         return {"error": "Session not found"}
     sess = ikhtebaar_sessions.pop(session_id)
+
+    # Run final sweep if frontend sent the complete audio blob
+    if file is not None:
+        try:
+            final_audio_bytes = await file.read()
+            await final_audio_sweep(sess, final_audio_bytes)
+        except Exception as e:
+            logger.warning(f"[ikhtebaar conclude] Final audio sweep failed: {e}")
+
     return finalize_recitation_session(sess, session_id, request=request)
 
 # ----------------- TASMEE STATEFUL ENDPOINTS -----------------
@@ -855,10 +943,19 @@ async def tasmee_chunk(session_id: str = Form(...), file: UploadFile = File(...)
     return await process_live_recitation_chunk(tasmee_sessions[session_id], audio_bytes)
 
 @app.post("/api/tasmee/conclude_session")
-async def tasmee_conclude_session(request: Request, session_id: str = Form(...)):
+async def tasmee_conclude_session(request: Request, session_id: str = Form(...), file: UploadFile = File(None)):
     if session_id not in tasmee_sessions:
         return {"error": "Session not found"}
     sess = tasmee_sessions.pop(session_id)
+
+    # Run final sweep if frontend sent the complete audio blob
+    if file is not None:
+        try:
+            final_audio_bytes = await file.read()
+            await final_audio_sweep(sess, final_audio_bytes)
+        except Exception as e:
+            logger.warning(f"[tasmee conclude] Final audio sweep failed: {e}")
+
     return finalize_recitation_session(sess, session_id, request=request)
 
 @app.post("/api/cancel_session")

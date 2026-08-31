@@ -258,9 +258,11 @@ export const TasmeeTab = () => {
       const recorder = new WaveMediaRecorder(stream);
       mediaRecorderRef.current = recorder;
 
-      // Incremental live chunk handler (every 4 seconds)
-      recorder.ondataavailable = async (e) => {
-        if (!e.data || e.data.size === 0) return;
+      // Incremental live chunk handler (every 6 seconds — aligned to server's 6s rolling buffer cap)
+      // IMPORTANT: This handler returns the fetch Promise so WaveMediaRecorder's
+      // single-in-flight mutex can release the lock precisely when the server responds.
+      recorder.ondataavailable = (e) => {
+        if (!e.data || e.data.size === 0) return Promise.resolve();
 
         const formData = new FormData();
         formData.append('file', e.data, `chunk_${chunkIndexRef.current}.wav`);
@@ -268,12 +270,12 @@ export const TasmeeTab = () => {
 
         chunkIndexRef.current += 1;
 
-        try {
-          const res = await fetch('/api/tasmee/chunk', {
-            method: 'POST',
-            body: formData,
-            signal: abortControllerRef.current?.signal
-          });
+        // Return the Promise — critical for mutex release in WaveMediaRecorder.flushChunk()
+        return fetch('/api/tasmee/chunk', {
+          method: 'POST',
+          body: formData,
+          signal: abortControllerRef.current?.signal
+        }).then(async (res) => {
           if (res.ok) {
             const data = await res.json();
             console.log("Tasmee Live Chunk Response:", data);
@@ -291,11 +293,11 @@ export const TasmeeTab = () => {
               setNudgeActive(false);
             }
           }
-        } catch (err) {
+        }).catch((err) => {
           if (err.name !== 'AbortError') {
             console.warn("Live chunk grading failed:", err);
           }
-        }
+        });
       };
 
       // Wrap up session instantly on recorder stop
@@ -314,6 +316,9 @@ export const TasmeeTab = () => {
         try {
           const formData = new FormData();
           formData.append('session_id', sessionIdRef.current);
+          // Send the complete audio recording so the backend can run a final
+          // full-audio Whisper sweep to confirm any words the rolling chunks missed.
+          formData.append('file', finalBlob, 'full_recitation.wav');
 
           const response = await fetch('/api/tasmee/conclude_session', {
             method: 'POST',
@@ -346,8 +351,8 @@ export const TasmeeTab = () => {
         }
       };
 
-      // Start recorder with 4-second chunking
-      recorder.start(4000);
+      // Start recorder with 6-second chunking (aligned to server 6s rolling buffer cap)
+      recorder.start(6000);
       setAnalyserNode(recorder.getAnalyser());
       setIsRecording(true);
 
