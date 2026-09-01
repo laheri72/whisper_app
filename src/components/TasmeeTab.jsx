@@ -66,6 +66,7 @@ export const TasmeeTab = () => {
   const abortControllerRef = useRef(null);
   const textContainerRef = useRef(null);
   const correctionsContainerRef = useRef(null);
+  const assessmentCardRef = useRef(null);
   const chunkIndexRef = useRef(0);
   const sessionIdRef = useRef('');
 
@@ -75,6 +76,13 @@ export const TasmeeTab = () => {
       correctionsContainerRef.current.scrollTop = correctionsContainerRef.current.scrollHeight;
     }
   }, [transcriptionData]);
+
+  // Auto-scroll to top Assessment Score card when evaluation finishes
+  useEffect(() => {
+    if (evaluationResult && assessmentCardRef.current) {
+      assessmentCardRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [evaluationResult]);
 
   // Apply Juz page range calculations
   useEffect(() => {
@@ -606,7 +614,93 @@ export const TasmeeTab = () => {
         </div>
       </div>
 
-      {/* 2. Target Text & Audio Recording Section */}
+      {/* 2. Top Prominent Assessment Score Card (Zero-Scroll Visibility) */}
+      {evaluationResult && (
+        <div 
+          ref={assessmentCardRef}
+          className="glass-panel-gold rounded-2xl p-6 border border-gold-500/50 shadow-2xl space-y-6 animate-slideDown ring-1 ring-gold-500/20"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-6 border-b border-slate-800 pb-5">
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-slate-950 font-extrabold text-2xl flex items-center justify-center shadow-gold-glow">
+                {evaluationResult.score ?? evaluationResult.accuracy_score ?? 0}%
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg font-bold text-slate-100">Assessment Score</h3>
+                  <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                    (evaluationResult.score ?? evaluationResult.accuracy_score ?? 0) >= 80 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                  }`}>
+                    {(evaluationResult.score ?? evaluationResult.accuracy_score ?? 0) >= 90 ? 'Excellent' : (evaluationResult.score ?? evaluationResult.accuracy_score ?? 0) >= 75 ? 'Good' : 'Needs Practice'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-1">
+                  Verified against Madani text standard.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 ml-auto">
+              <div className="px-4 py-2 rounded-xl bg-slate-900/90 border border-slate-800 text-center">
+                <span className="block text-[10px] text-slate-400 font-semibold uppercase">Total Words</span>
+                <span className="text-sm font-bold text-slate-100">{totalWords}</span>
+              </div>
+              <div className="px-4 py-2 rounded-xl bg-emerald-950/60 border border-emerald-500/30 text-center">
+                <span className="block text-[10px] text-emerald-400 font-semibold uppercase">Matches</span>
+                <span className="text-sm font-bold text-emerald-300">{matchCount}</span>
+              </div>
+              <div className="px-4 py-2 rounded-xl bg-red-950/60 border border-red-500/30 text-center">
+                <span className="block text-[10px] text-red-400 font-semibold uppercase">Mistakes</span>
+                <span className="text-sm font-bold text-red-300">{mistakeCount}</span>
+              </div>
+              <button
+                onClick={() => updateTasmee({ evaluationResult: null })}
+                className="p-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-400 hover:text-white border border-slate-700/80 transition-all ml-2"
+                title="Dismiss Assessment Card"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {evaluationResult.user_transcription && (
+            <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Transcribed Output:</span>
+              <p dir="rtl" className="font-arabic text-lg text-amber-200 text-right">{evaluationResult.user_transcription}</p>
+            </div>
+          )}
+
+          <div className="space-y-3">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
+              <span>Word-by-Word Assessment</span>
+              <span className="text-gold-400 font-arabic text-sm">التدقيق الحرفي</span>
+            </h4>
+
+            <div 
+              dir="rtl"
+              className="p-6 rounded-2xl bg-slate-950 border border-slate-800 flex flex-wrap justify-start gap-3 text-right leading-loose font-arabic text-2xl"
+            >
+              {evaluationResult.comparison?.map((item, idx) => {
+                const isMatch = item.status === 'match' || item.status === 'correct' || item.status === 'bismillah_skipped';
+                return (
+                  <span
+                    key={idx}
+                    className={`inline-flex items-center px-3 py-1.5 rounded-xl border text-xl font-bold transition-all shadow-sm ${
+                      isMatch
+                        ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-300 hover:border-emerald-400'
+                        : 'bg-red-950/70 border-red-500/50 text-red-300 hover:border-red-400 ring-1 ring-red-500/30 animate-pulse'
+                    }`}
+                  >
+                    {item.word}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Target Text & Audio Recording Section */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         {/* Left Card: Reference Text Container */}
         <div className="glass-panel rounded-2xl p-6 border border-gold-500/20 shadow-xl space-y-4 transition-all duration-300">
@@ -809,11 +903,11 @@ export const TasmeeTab = () => {
           <div>
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <h3 className="font-bold text-slate-100 text-sm flex items-center gap-2">
-                <Mic className="w-4 h-4 text-gold-400" /> Recitation Buffer Recorder
+                <Mic className="w-4 h-4 text-gold-400" /> Audio Recording
               </h3>
               {isStartingRecording ? (
                 <span className="font-mono text-xs font-bold text-amber-400 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-800 animate-pulse flex items-center gap-1">
-                  <RefreshCw className="w-3 h-3 animate-spin text-amber-400" /> Activating Mic...
+                  <RefreshCw className="w-3 h-3 animate-spin text-amber-400" /> Connecting...
                 </span>
               ) : isRecording ? (
                 <span className={`font-mono text-xs font-bold px-2 py-0.5 rounded border ${
@@ -826,7 +920,7 @@ export const TasmeeTab = () => {
               ) : null}
             </div>
             <p className="text-xs text-slate-400 mt-2">
-              Click <strong>"Initiate Recitation"</strong> to start. Chunks are dynamically sent to the Whisper AI model every 10 seconds. Click <strong>"Conclude Recitation"</strong> once finished.
+              Begin recitation when ready. Live evaluation verifies speech in real time.
             </p>
           </div>
 
@@ -838,27 +932,27 @@ export const TasmeeTab = () => {
             {isStartingRecording ? (
               <div className="py-4 rounded-xl bg-slate-900 border border-amber-500/40 text-center text-amber-300 text-xs font-bold flex items-center justify-center gap-2 animate-pulse">
                 <RefreshCw className="w-4 h-4 animate-spin text-amber-400" />
-                <span>Activating Microphone & Audio Graph...</span>
+                <span>Activating Microphone...</span>
               </div>
             ) : isFinalizingStream ? (
               <div className="p-4 rounded-xl bg-slate-900 border border-amber-500/40 text-center space-y-2 animate-pulse">
                 <div className="flex items-center justify-center gap-2 text-amber-300 text-xs font-bold">
                   <RefreshCw className="w-4 h-4 animate-spin text-amber-400" />
-                  <span>Merging Audio Chunks & Finalizing Stream...</span>
+                  <span>Finalizing Audio Stream...</span>
                 </div>
               </div>
             ) : isAnalyzing ? (
               <div className="p-4 rounded-xl bg-slate-950 border border-gold-500/40 shadow-gold-glow space-y-3 animate-fadeIn">
                 <div className="flex items-center justify-between text-xs font-bold">
                   <span className="text-gold-300 flex items-center gap-1.5">
-                    <Sparkles className="w-4 h-4 text-amber-400 animate-spin-slow" /> AI Grading System
+                    <Sparkles className="w-4 h-4 text-amber-400 animate-spin-slow" /> Evaluation in Progress
                   </span>
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-amber-400 font-extrabold">{analysisProgress}%</span>
                     <button
                       onClick={abortRecitation}
                       className="p-1 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 transition-all ml-1"
-                      title="Cancel & Abort AI Grading"
+                      title="Cancel Evaluation"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
@@ -874,7 +968,7 @@ export const TasmeeTab = () => {
 
                 <div className="text-[11px] text-slate-400 font-medium flex items-center justify-between">
                   <span className="animate-pulse text-slate-300 font-semibold">{analysisStage}</span>
-                  <span className="text-amber-400/80 font-mono text-[10px]">Academic Engine</span>
+                  <span className="text-amber-400/80 font-mono text-[10px]">Live Analysis</span>
                 </div>
               </div>
             ) : !isRecording ? (
@@ -893,22 +987,22 @@ export const TasmeeTab = () => {
                   {!isModelReady ? (
                     <>
                       <RefreshCw className="w-5 h-5 animate-spin text-amber-400" />
-                      <span>AI Model Initializing (Loading Weights)...</span>
+                      <span>Engine Initializing...</span>
                     </>
                   ) : (
                     <>
                       <Mic className="w-5 h-5" />
-                      <span>Initiate Recitation</span>
+                      <span>Start Recitation</span>
                     </>
                   )}
                 </button>
 
-                {/* Instant Audio Self-Auditing & Playback Controls */}
+                {/* Audio Self-Auditing & Playback Controls */}
                 {recordedAudioUrl && (
                   <div className="p-4 rounded-xl bg-slate-950/90 border border-gold-500/30 space-y-3 animate-fadeIn shadow-lg">
                     <div className="flex items-center justify-between">
                       <span className="text-[11px] font-bold uppercase tracking-wider text-gold-300 flex items-center gap-1.5">
-                        <Volume2 className="w-3.5 h-3.5 text-amber-400" /> Instant Recitation Audio Playback:
+                        <Volume2 className="w-3.5 h-3.5 text-amber-400" /> Recitation Playback:
                       </span>
                       {/* Playback speed selector */}
                       <div className="flex items-center gap-1 bg-slate-900 px-1.5 py-0.5 rounded-lg border border-slate-800 text-[10px] font-mono">
@@ -940,7 +1034,7 @@ export const TasmeeTab = () => {
                         download="tasmee_recitation.wav"
                         className="flex-1 py-2 rounded-xl bg-slate-900 border border-slate-700 hover:bg-slate-800 hover:border-gold-500/40 text-gold-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-sm"
                       >
-                        <Download className="w-3.5 h-3.5" /> Save Audio
+                        <Download className="w-3.5 h-3.5" /> Export Audio
                       </a>
                       <button
                         onClick={() => {
@@ -965,14 +1059,14 @@ export const TasmeeTab = () => {
                       onClick={resumeRecitation}
                       className="flex-1 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-slate-950 font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md"
                     >
-                      <Play className="w-4 h-4" /> Resume Stream
+                      <Play className="w-4 h-4" /> Resume
                     </button>
                   ) : (
                     <button
                       onClick={pauseRecitation}
                       className="flex-1 py-3 rounded-xl bg-slate-800 border border-slate-700 hover:bg-slate-700 text-amber-400 font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md"
                     >
-                      <Pause className="w-4 h-4" /> Pause & Check Audio
+                      <Pause className="w-4 h-4" /> Pause
                     </button>
                   )}
 
@@ -980,7 +1074,7 @@ export const TasmeeTab = () => {
                   <button
                     onClick={abortRecitation}
                     className="p-3 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 hover:border-red-500/60 transition-all flex items-center justify-center shadow-md shrink-0"
-                    title="Discard Recitation (Cancel without grading)"
+                    title="Discard Recitation"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -991,14 +1085,14 @@ export const TasmeeTab = () => {
                   className="w-full py-4 rounded-xl bg-gradient-to-r from-red-500 to-red-600 hover:from-red-400 hover:to-red-500 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-lg shadow-red-500/30 transition-all"
                 >
                   <MicOff className="w-5 h-5" />
-                  <span>Conclude Recitation & Grade</span>
+                  <span>Finish & Evaluate</span>
                 </button>
 
                 {/* Instant Audio Snapshot on Pause */}
                 {isPaused && recordedAudioUrl && (
                   <div className="p-3 rounded-xl bg-slate-950/90 border border-amber-500/40 space-y-2 animate-fadeIn">
                     <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1">
-                      <Volume2 className="w-3 h-3" /> Live Audio Preview (Check Voice Clarity):
+                      <Volume2 className="w-3 h-3" /> Audio Preview:
                     </span>
                     <audio src={recordedAudioUrl} controls className="w-full h-8 accent-amber-500" />
                   </div>
@@ -1029,7 +1123,7 @@ export const TasmeeTab = () => {
             <div className="p-4 rounded-xl bg-slate-950/85 border border-slate-800 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                  Live Recitation Progress (Stateful Mukhtabir Engine):
+                  Live Recitation Progress:
                 </span>
                 <span className="text-gold-400 font-arabic text-sm" dir="rtl">متابعة التسميع المباشر</span>
               </div>
@@ -1083,7 +1177,7 @@ export const TasmeeTab = () => {
                       {isRecording ? (
                         <span className="flex items-center justify-center gap-2 text-amber-400 animate-pulse">
                           <span className="w-2 h-2 rounded-full bg-amber-400"></span>
-                          Listening to recitation... Recite clearly in Arabic
+                          Listening... Recite in Arabic
                         </span>
                       ) : (
                         "Awaiting recitation start..."
@@ -1097,81 +1191,7 @@ export const TasmeeTab = () => {
         </div>
       </div>
 
-      {/* 3. Academic Evaluation & Grade Report Card */}
-      {evaluationResult && (
-        <div className="glass-panel-gold rounded-2xl p-6 border border-gold-500/40 shadow-2xl space-y-6 animate-fadeIn">
-          <div className="flex flex-wrap items-center justify-between gap-6 border-b border-slate-800 pb-5">
-            <div className="flex items-center gap-4">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-slate-950 font-extrabold text-2xl flex items-center justify-center shadow-gold-glow">
-                {evaluationResult.score ?? evaluationResult.accuracy_score ?? 0}%
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-lg font-bold text-slate-100">Recitation Assessment Score</h3>
-                  <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                    (evaluationResult.score ?? evaluationResult.accuracy_score ?? 0) >= 80 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                  }`}>
-                    {(evaluationResult.score ?? evaluationResult.accuracy_score ?? 0) >= 90 ? 'Excellent Recitation' : (evaluationResult.score ?? evaluationResult.accuracy_score ?? 0) >= 75 ? 'Good Recitation' : 'Needs Practice'}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-400 mt-1">
-                  Audio recitation transcribed and verified against Uthmani text standard.
-                </p>
-              </div>
-            </div>
 
-            <div className="flex items-center gap-4">
-              <div className="px-4 py-2 rounded-xl bg-slate-900/90 border border-slate-800 text-center">
-                <span className="block text-[10px] text-slate-400 font-semibold uppercase">Total Words</span>
-                <span className="text-sm font-bold text-slate-100">{totalWords}</span>
-              </div>
-              <div className="px-4 py-2 rounded-xl bg-emerald-950/60 border border-emerald-500/30 text-center">
-                <span className="block text-[10px] text-emerald-400 font-semibold uppercase">Matches</span>
-                <span className="text-sm font-bold text-emerald-300">{matchCount}</span>
-              </div>
-              <div className="px-4 py-2 rounded-xl bg-red-950/60 border border-red-500/30 text-center">
-                <span className="block text-[10px] text-red-400 font-semibold uppercase">Mistakes</span>
-                <span className="text-sm font-bold text-red-300">{mistakeCount}</span>
-              </div>
-            </div>
-          </div>
-
-          {evaluationResult.user_transcription && (
-            <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Recognized Recitation Output:</span>
-              <p dir="rtl" className="font-arabic text-lg text-amber-200 text-right">{evaluationResult.user_transcription}</p>
-            </div>
-          )}
-
-          <div className="space-y-3">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
-              <span>Word-by-Word Analysis (Green = Match, Red = Mistake)</span>
-              <span className="text-gold-400 font-arabic text-sm">التدقيق الحرفي</span>
-            </h4>
-
-            <div 
-              dir="rtl"
-              className="p-6 rounded-2xl bg-slate-950 border border-slate-800 flex flex-wrap justify-start gap-3 text-right leading-loose font-arabic text-2xl"
-            >
-              {evaluationResult.comparison?.map((item, idx) => {
-                const isMatch = item.status === 'match' || item.status === 'correct' || item.status === 'bismillah_skipped';
-                return (
-                  <span
-                    key={idx}
-                    className={`inline-flex items-center px-3 py-1.5 rounded-xl border text-xl font-bold transition-all shadow-sm ${
-                      isMatch
-                        ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-300 hover:border-emerald-400'
-                        : 'bg-red-950/70 border-red-500/50 text-red-300 hover:border-red-400 ring-1 ring-red-500/30 animate-pulse'
-                    }`}
-                  >
-                    {item.word}
-                  </span>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
       {isZoomed && zoomedPageList.length > 0 && (
         <div 
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-fadeIn cursor-zoom-out"

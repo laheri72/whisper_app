@@ -50,9 +50,9 @@ export const OnboardingModal = ({ onSubmitDisplayName }) => {
             </div>
           </div>
           <div>
-            <h2 className="text-xl font-bold text-slate-100 tracking-tight">First-Time Setup</h2>
+            <h2 className="text-xl font-bold text-slate-100 tracking-tight">Profile Setup</h2>
             <p className="text-xs text-slate-400 mt-1">
-              Welcome to the Academic Quran Portal. Please configure your profile to continue.
+              Please enter your full name to configure your student profile.
             </p>
           </div>
         </div>
@@ -61,7 +61,7 @@ export const OnboardingModal = ({ onSubmitDisplayName }) => {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
             <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
-              Display Name / Full Name
+              Full Name
             </label>
             <div className="relative">
               <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-500">
@@ -72,12 +72,12 @@ export const OnboardingModal = ({ onSubmitDisplayName }) => {
                 required
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="e.g. Professor Mustafa Shakir"
+                placeholder="e.g. Abdullah Al-Mansoor"
                 className="w-full bg-slate-900/90 text-slate-100 text-sm rounded-xl pl-10 pr-4 py-3 border border-slate-700/80 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-all font-medium"
               />
             </div>
             <p className="text-[10px] text-slate-400">
-              This name will be displayed on your official academic grading reports and dashboard interface.
+              Your name will appear on official assessment records.
             </p>
           </div>
 
@@ -98,7 +98,7 @@ export const OnboardingModal = ({ onSubmitDisplayName }) => {
                 <span>Saving Profile...</span>
               </>
             ) : (
-              <span>Proceed to Portal Dashboard</span>
+              <span>Continue</span>
             )}
           </button>
         </form>

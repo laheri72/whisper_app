@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { BookOpen, Play, Pause, ChevronLeft, ChevronRight, Volume2, Info, Layers, RefreshCw, FileText, RotateCcw, Activity } from 'lucide-react';
 import { getJuzPageRange, JUZ_LIST, SURAH_LIST } from '../utils/juzMapping';
 
-export const TilawatTab = () => {
+export const TilawatTab = ({ activeTab }) => {
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedJuz, setSelectedJuz] = useState(1);
   const [selectedSurah, setSelectedSurah] = useState(1);
@@ -14,11 +14,6 @@ export const TilawatTab = () => {
   const [ayahInfo, setAyahInfo] = useState(null);
   const [loadingInfo, setLoadingInfo] = useState(false);
   const [viewMode, setViewMode] = useState('manuscript'); // 'manuscript' | 'text'
-  
-  // Manuscript JSON Base64 state
-  const [quranData, setQuranData] = useState([]);
-  const [manuscriptBase64, setManuscriptBase64] = useState('');
-  const [loadingJson, setLoadingJson] = useState(false);
 
   // Capture natural dimensions of the manuscript page image dynamically
   const [naturalDimensions, setNaturalDimensions] = useState({ width: 1000, height: 1000 });
@@ -45,6 +40,31 @@ export const TilawatTab = () => {
   useEffect(() => { selectedAyahRef.current = selectedAyah; }, [selectedAyah]);
   useEffect(() => { currentPageRef.current = currentPage; }, [currentPage]);
 
+  const stopCurrentAudio = () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.onended = null;
+      audioRef.current.onerror = null;
+      audioRef.current.src = "";
+      audioRef.current = null;
+    }
+  };
+
+  // Auto-pause Tilawat audio when switching to another tab (e.g. Tasmee or Ikhtebaar)
+  useEffect(() => {
+    if (activeTab && activeTab !== 'tilawat') {
+      stopCurrentAudio();
+      setIsPlayingAudio(false);
+    }
+  }, [activeTab]);
+
+  // Clean up audio on component unmount
+  useEffect(() => {
+    return () => {
+      stopCurrentAudio();
+    };
+  }, []);
+
   // Deduplicate mappedBoxes by global_id for clean rendering in Ayah List View
   const uniqueAyahList = useMemo(() => {
     const seen = new Set();
@@ -54,25 +74,6 @@ export const TilawatTab = () => {
       return true;
     });
   }, [mappedBoxes]);
-
-  // Fetch quran_data.json once on mount
-  useEffect(() => {
-    const fetchQuranJson = async () => {
-      setLoadingJson(true);
-      try {
-        const res = await fetch('/data/quran_data.json');
-        if (res.ok) {
-          const data = await res.json();
-          setQuranData(data);
-        }
-      } catch (err) {
-        console.error("Failed to load /data/quran_data.json:", err);
-      } finally {
-        setLoadingJson(false);
-      }
-    };
-    fetchQuranJson();
-  }, []);
 
   // Fetch page bounding boxes when page changes
   useEffect(() => {
@@ -89,42 +90,11 @@ export const TilawatTab = () => {
     setNaturalDimensions({ width: 1000, height: 1000 });
   }, [currentPage]);
 
-  // Extract the active page image base64 from cached JSON
-  useEffect(() => {
-    if (quranData.length > 0) {
-      const pageData = quranData.find(p => p.page_number === currentPage);
-      if (pageData) {
-        setManuscriptBase64(pageData.image_base64 || '');
-      } else {
-        setManuscriptBase64('');
-      }
-    }
-  }, [currentPage, quranData]);
-
   // Image load handler to capture actual coordinates space size
   const handleImageLoad = (e) => {
     const { naturalWidth, naturalHeight } = e.target;
     if (naturalWidth && naturalHeight) {
       setNaturalDimensions({ width: naturalWidth, height: naturalHeight });
-    }
-  };
-
-  // Format manuscript image source (Data URI prefix fix)
-  const getFormattedImageSrc = (base64String) => {
-    if (!base64String) return '';
-    if (base64String.startsWith('data:image')) {
-      return base64String;
-    }
-    return `data:image/jpeg;base64,${base64String}`;
-  };
-
-  const stopCurrentAudio = () => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.onended = null;
-      audioRef.current.onerror = null;
-      audioRef.current.src = "";
-      audioRef.current = null;
     }
   };
 
@@ -439,7 +409,7 @@ export const TilawatTab = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left 2 Columns: Manuscript / Ayah Map */}
         <div className="lg:col-span-2 glass-panel dark:glass-panel light:bg-white light:border-slate-200 rounded-2xl p-6 border flex flex-col items-center justify-center min-h-[600px] relative transition-colors duration-200 overflow-hidden">
-          {loadingBoxes || loadingJson ? (
+          {loadingBoxes ? (
             <div className="flex flex-col items-center justify-center gap-3 text-gold-400 py-20">
               <RefreshCw className="w-8 h-8 animate-spin" />
               <span className="text-sm font-semibold">Loading Page {currentPage}...</span>
@@ -447,22 +417,15 @@ export const TilawatTab = () => {
           ) : viewMode === 'manuscript' ? (
             /* Manuscript View - Clean Key and Relative Container */
             <div key={`manuscript-page-${currentPage}`} className="relative inline-block mx-auto max-w-xl border border-gold-500/30 dark:border-gold-500/30 light:border-slate-200 rounded-xl overflow-hidden bg-amber-50/5 shadow-2xl p-0 m-0 w-full">
-              {manuscriptBase64 ? (
-                <img
-                  src={getFormattedImageSrc(manuscriptBase64)}
-                  alt={`Madani Quran Page ${currentPage}`}
-                  onLoad={handleImageLoad}
-                  className="relative z-0 pointer-events-none block max-w-full h-auto p-0 m-0 mx-auto"
-                />
-              ) : (
-                <div className="flex flex-col items-center justify-center p-20 text-center space-y-4 min-h-[500px] w-full">
-                  <BookOpen className="w-16 h-16 text-amber-500/40" />
-                  <p className="text-xs text-slate-400">Manuscript Page {currentPage} not found in JSON data.</p>
-                </div>
-              )}
+              <img
+                src={`/api/page_image/${currentPage}`}
+                alt={`Madani Quran Page ${currentPage}`}
+                onLoad={handleImageLoad}
+                className="relative z-0 pointer-events-none block max-w-full h-auto p-0 m-0 mx-auto select-none"
+              />
 
               {/* Bounding boxes */}
-              {manuscriptBase64 && mappedBoxes.map((box, idx) => {
+              {mappedBoxes.map((box, idx) => {
                 const isSelected = selectedAyah?.global_id === box.global_id;
                 
                 const leftPct = (box.min_x / naturalDimensions.width) * 100;
@@ -524,11 +487,11 @@ export const TilawatTab = () => {
           <div className="glass-panel-gold dark:glass-panel-gold light:bg-white light:border-slate-200 rounded-2xl p-5 border shadow-xl space-y-4 transition-colors duration-205">
             <div className="flex items-center justify-between border-b border-slate-800 dark:border-slate-800 light:border-slate-200 pb-3">
               <h3 className="font-bold text-slate-100 dark:text-slate-100 light:text-slate-955 text-sm flex items-center gap-2">
-                <Info className="w-4 h-4 text-gold-400" /> Ayah Recitation Inspector
+                <Info className="w-4 h-4 text-gold-400" /> Verse Details & Audio
               </h3>
               {isPlayingAudio && (
                 <span className="flex items-center gap-1 text-[11px] font-semibold text-amber-400 animate-pulse">
-                  <Volume2 className="w-3.5 h-3.5" /> Reciting...
+                  <Volume2 className="w-3.5 h-3.5" /> Playing...
                 </span>
               )}
             </div>
@@ -537,21 +500,21 @@ export const TilawatTab = () => {
               <div className="space-y-4">
                 <div className="p-4 rounded-xl bg-slate-900/90 dark:bg-slate-900/90 light:bg-slate-50 border border-slate-800 dark:border-slate-800 light:border-slate-200 space-y-2">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="text-slate-400 dark:text-slate-400 light:text-slate-655 font-medium">Surah Number:</span>
+                    <span className="text-slate-400 dark:text-slate-400 light:text-slate-655 font-medium">Surah:</span>
                     <span className="font-mono text-gold-300 dark:text-gold-300 light:text-slate-900 font-bold">{selectedAyah.sura}</span>
                   </div>
                   <div className="flex items-center justify-between text-xs">
-                    <span className="text-slate-400 dark:text-slate-400 light:text-slate-655 font-medium">Ayah Number:</span>
+                    <span className="text-slate-400 dark:text-slate-400 light:text-slate-655 font-medium">Ayah:</span>
                     <span className="font-mono text-gold-300 dark:text-gold-300 light:text-slate-900 font-bold">{selectedAyah.ayah}</span>
                   </div>
                   <div className="flex items-center justify-between text-xs">
-                    <span className="text-slate-400 dark:text-slate-400 light:text-slate-655 font-medium">Global Ayah ID:</span>
+                    <span className="text-slate-400 dark:text-slate-400 light:text-slate-655 font-medium">Ayah ID:</span>
                     <span className="font-mono text-emerald-400 font-bold">#{selectedAyah.global_id}</span>
                   </div>
                 </div>
 
                 {loadingInfo ? (
-                  <div className="text-xs text-slate-400 py-2 flex items-center justify-center gap-2"><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Fetching details...</div>
+                  <div className="text-xs text-slate-400 py-2 flex items-center justify-center gap-2"><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Loading...</div>
                 ) : ayahInfo ? (
                   <div className="p-4 rounded-xl bg-amber-500/10 dark:bg-amber-500/10 light:bg-amber-50 border border-amber-500/30 light:border-amber-300/60 text-amber-250 dark:text-amber-200 light:text-amber-800 text-center space-y-1">
                     <h4 className="font-arabic text-lg text-gold-300 dark:text-gold-300 light:text-amber-800 font-bold">{ayahInfo.surah_name}</h4>
@@ -559,12 +522,12 @@ export const TilawatTab = () => {
                   </div>
                 ) : null}
 
-                {/* Advanced Audio Controls Panel */}
+                {/* Audio Controls Panel */}
                 <div className="p-4 rounded-xl bg-slate-900/60 dark:bg-slate-900/60 light:bg-slate-50 border border-slate-800 dark:border-slate-800 light:border-slate-200 space-y-3.5">
-                  <div className="text-xs font-bold text-slate-400 dark:text-slate-400 light:text-slate-555 uppercase tracking-wider">Audio Playback Controls</div>
+                  <div className="text-xs font-bold text-slate-400 dark:text-slate-400 light:text-slate-555 uppercase tracking-wider">Audio Playback</div>
                   
                   <div className="flex flex-wrap items-center gap-2">
-                    {/* Continuous Reading Toggle Pill */}
+                    {/* Continuous Reading Toggle */}
                     <button
                       onClick={() => setAutoNext(!autoNext)}
                       className={`flex-1 py-2 px-3 rounded-lg border text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
@@ -572,13 +535,13 @@ export const TilawatTab = () => {
                           ? 'bg-amber-500/20 text-gold-300 border-amber-500/40 shadow-inner' 
                           : 'bg-slate-950/60 dark:bg-slate-950/60 light:bg-white text-slate-400 dark:text-slate-400 light:text-slate-500 border-slate-800 dark:border-slate-700 light:border-slate-200'
                       }`}
-                      title="Automatically continue reading through next Ayahs & pages seamlessly when audio finishes"
+                      title="Automatically advance to the next Ayah"
                     >
                       <Activity className={`w-3.5 h-3.5 ${autoNext ? 'text-amber-400 animate-pulse' : 'text-slate-500'}`} />
-                      <span>{autoNext ? "Continuous Reading ON" : "Continuous Reading OFF"}</span>
+                      <span>{autoNext ? "Auto-Advance: ON" : "Auto-Advance: OFF"}</span>
                     </button>
 
-                    {/* Loop Toggle Pill */}
+                    {/* Loop Toggle */}
                     <button
                       onClick={() => setIsLooping(!isLooping)}
                       className={`flex-1 py-2 px-3 rounded-lg border text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
@@ -586,16 +549,16 @@ export const TilawatTab = () => {
                           ? 'bg-emerald-500/25 text-emerald-300 border-emerald-500/40 shadow-inner' 
                           : 'bg-slate-950/60 dark:bg-slate-950/60 light:bg-white text-slate-400 dark:text-slate-400 light:text-slate-500 border-slate-800 dark:border-slate-700 light:border-slate-200'
                       }`}
-                      title="Loop and repeat the current Ayah indefinitely"
+                      title="Repeat the current Ayah"
                     >
                       <RotateCcw className={`w-3.5 h-3.5 ${isLooping ? 'text-emerald-400 animate-spin-slow' : 'text-slate-500'}`} />
-                      <span>Loop Ayah</span>
+                      <span>Loop Verse</span>
                     </button>
                   </div>
 
-                  {/* Playback Speed Cycler */}
+                  {/* Playback Speed */}
                   <div className="flex items-center justify-between text-xs border-t border-slate-800 dark:border-slate-800 light:border-slate-200 pt-2.5">
-                    <span className="text-slate-400 dark:text-slate-400 light:text-slate-500 font-medium">Reciter Speed:</span>
+                    <span className="text-slate-400 dark:text-slate-400 light:text-slate-500 font-medium">Speed:</span>
                     <button
                       onClick={cyclePlaybackSpeed}
                       className="px-3 py-1 rounded-md bg-slate-950 dark:bg-slate-950 light:bg-white text-gold-300 dark:text-gold-300 light:text-slate-805 border border-slate-850 dark:border-slate-700 light:border-slate-200 font-bold hover:border-gold-500/50 hover:text-gold-200 transition-colors shadow-sm"
@@ -612,20 +575,20 @@ export const TilawatTab = () => {
                     className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-extrabold text-xs flex items-center justify-center gap-2 shadow-gold-glow transition-all"
                   >
                     {isPlayingAudio ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-slate-950" />}
-                    <span>{isPlayingAudio ? "Pause Recitation" : "Listen Recitation Audio"}</span>
+                    <span>{isPlayingAudio ? "Pause Audio" : "Play Verse Audio"}</span>
                   </button>
                 </div>
               </div>
             ) : (
               <div className="text-center py-10 text-slate-400 text-xs space-y-2">
                 <BookOpen className="w-8 h-8 mx-auto text-slate-600" />
-                <p className="dark:text-slate-400 light:text-slate-500">Click on any Ayah bounding box or list item to hear audio recitation and view metadata.</p>
+                <p className="dark:text-slate-400 light:text-slate-500">Select any verse on the page to view details and listen to recitation.</p>
                 <div className="pt-2">
                   <button
                     onClick={togglePlayback}
                     className="py-2.5 px-4 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-gold-300 font-bold text-xs border border-amber-500/30 transition-all inline-flex items-center gap-2"
                   >
-                    <Play className="w-3.5 h-3.5 fill-gold-300" /> Start Continuous Reading
+                    <Play className="w-3.5 h-3.5 fill-gold-300" /> Play Page
                   </button>
                 </div>
               </div>

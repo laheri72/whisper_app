@@ -145,10 +145,18 @@ export function App() {
               {/* Scrollable Viewport Container */}
               <main className="flex-1 overflow-y-auto p-6 md:p-8 bg-slate-100/50 dark:bg-slate-900/30 transition-colors duration-200">
                 <div className="max-w-7xl w-full mx-auto h-full">
-                  {activeTab === 'tilawat' && <TilawatTab />}
-                  {activeTab === 'tasmee' && <TasmeeTab />}
-                  {activeTab === 'ikhtebaar' && <IkhtebaarTab />}
-                  {activeTab === 'analytics' && <AnalyticsTab />}
+                  <div className={activeTab === 'tilawat' ? 'block' : 'hidden'}>
+                    <TilawatTab activeTab={activeTab} />
+                  </div>
+                  <div className={activeTab === 'tasmee' ? 'block' : 'hidden'}>
+                    <TasmeeTab />
+                  </div>
+                  <div className={activeTab === 'ikhtebaar' ? 'block' : 'hidden'}>
+                    <IkhtebaarTab />
+                  </div>
+                  <div className={activeTab === 'analytics' ? 'block' : 'hidden'}>
+                    <AnalyticsTab />
+                  </div>
                 </div>
               </main>
             </div>

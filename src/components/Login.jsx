@@ -89,20 +89,20 @@ export const Login = ({ onLoginSuccess }) => {
           </div>
           <div>
             <h1 className="text-xl font-extrabold tracking-wide gold-gradient-text">
-              {isRegistering ? 'Register Talabat Profile' : 'Academic Quran Portal'}
+              {isRegistering ? 'Student Registration' : 'Quranic Portal'}
             </h1>
             <span className="text-[10px] font-bold text-slate-400 tracking-wider uppercase">
-              {isRegistering ? 'Create new credentials' : 'Academic Recitation & Testing Suite'}
+              {isRegistering ? 'Create student credentials' : 'Department of Quranic Studies'}
             </span>
           </div>
         </div>
 
         {/* Input Form */}
         <form onSubmit={handleSubmit} className="space-y-5">
-          {/* TR no Input */}
+          {/* Student ID Input */}
           <div className="space-y-1.5">
             <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider">
-              Talabat TR no. (5 digits)
+              Student ID (5 digits)
             </label>
             <div className="relative">
               <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-500">
@@ -114,16 +114,16 @@ export const Login = ({ onLoginSuccess }) => {
                 maxLength={5}
                 value={username}
                 onChange={(e) => setUsername(e.target.value.replace(/\D/g, ''))}
-                placeholder="Enter 5-digit TR no. (e.g. 27234)"
+                placeholder="Enter 5-digit Student ID (e.g. 27234)"
                 className="w-full bg-slate-900/90 text-slate-100 text-sm rounded-xl pl-10 pr-4 py-3 border border-slate-700/80 focus:outline-none focus:border-amber-500 transition-all font-mono tracking-widest font-semibold"
               />
             </div>
           </div>
 
-          {/* Passcode Input */}
+          {/* Password Input */}
           <div className="space-y-1.5">
             <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider">
-              Passcode
+              Password
             </label>
             <div className="relative">
               <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-500">
@@ -134,7 +134,7 @@ export const Login = ({ onLoginSuccess }) => {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder={isRegistering ? "Create password (min 5 characters)" : "Enter security passcode"}
+                placeholder={isRegistering ? "Create password (min 5 characters)" : "Enter password"}
                 className="w-full bg-slate-900/90 text-slate-100 text-sm rounded-xl pl-10 pr-4 py-3 border border-slate-700/80 focus:outline-none focus:border-amber-500 transition-all font-medium"
               />
             </div>
@@ -162,7 +162,7 @@ export const Login = ({ onLoginSuccess }) => {
             {loading ? (
               <RefreshCw className="w-4 h-4 animate-spin animate-infinite" />
             ) : (
-              <span>{isRegistering ? 'Register Profile' : 'Gain Portal Access'}</span>
+              <span>{isRegistering ? 'Register Account' : 'Sign In'}</span>
             )}
           </button>
         </form>
@@ -178,11 +178,9 @@ export const Login = ({ onLoginSuccess }) => {
             className="text-xs text-amber-400 hover:text-amber-300 transition-colors font-medium inline-flex items-center gap-1.5 hover:underline"
           >
             <ArrowRightLeft className="w-3.5 h-3.5" />
-            <span>
-              {isRegistering
-                ? 'Already have an account? Sign in here'
-                : "Don't have an account? Register here"}
-            </span>
+            {isRegistering
+              ? 'Already registered? Sign in'
+              : 'New student? Register here'}
           </button>
         </div>
 

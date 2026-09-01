@@ -8,16 +8,8 @@ import { getPageFromManuscript } from '../utils/quranLookup';
 
 export const IkhtebaarTab = () => {
   const { ikhtebaarState, updateIkhtebaar, quranData, fetchQuranData, loadingJson, isModelReady, modelStatus, modelError } = useApp();
-  const [showFullPage, setShowFullPage] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
   const audioPlayerRef = useRef(null);
-
-  const handleViewFullPage = async () => {
-    setShowFullPage(true);
-    if (!quranData) {
-      await fetchQuranData();
-    }
-  };
   const {
     rangeMode,
     selectedJuz,
@@ -72,6 +64,7 @@ export const IkhtebaarTab = () => {
   const timerIntervalRef = useRef(null);
   const abortControllerRef = useRef(null);
   const correctionsContainerRef = useRef(null);
+  const assessmentCardRef = useRef(null);
   const chunkIndexRef = useRef(0);
   const sessionIdRef = useRef('');
 
@@ -82,6 +75,13 @@ export const IkhtebaarTab = () => {
       correctionsContainerRef.current.scrollTop = correctionsContainerRef.current.scrollHeight;
     }
   }, [transcriptionData]);
+
+  // Auto-scroll to top Assessment Score card when evaluation finishes
+  useEffect(() => {
+    if (gradeResult && assessmentCardRef.current) {
+      assessmentCardRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [gradeResult]);
 
   // Apply Juz page range calculations
   useEffect(() => {
@@ -129,6 +129,26 @@ export const IkhtebaarTab = () => {
     };
   }, [isZoomed, currentZoomedIndex, zoomedPageList]);
 
+
+  // Open full manuscript viewer spanning from Start Verse page to Stop Verse page
+  const handleViewFullPage = (targetPage = null) => {
+    if (!currentQuestion) return;
+    const startPage = Number(currentQuestion?.page_number || 1);
+    const endPage = Number(currentQuestion?.end_page_number || startPage);
+
+    const minPage = Math.min(startPage, endPage);
+    const maxPage = Math.max(startPage, endPage);
+    const pageRangeList = [];
+    for (let p = minPage; p <= maxPage; p++) {
+      pageRangeList.push(p);
+    }
+
+    setZoomedPageList(pageRangeList);
+    const target = targetPage !== null ? Number(targetPage) : startPage;
+    const idx = pageRangeList.indexOf(target);
+    setCurrentZoomedIndex(idx >= 0 ? idx : 0);
+    setIsZoomed(true);
+  };
 
   // Fetch AI Question from /api/generate_ikhtebaar
   const generateQuestion = async () => {
@@ -625,7 +645,93 @@ export const IkhtebaarTab = () => {
         </div>
       </div>
 
-      {/* 2. Question Prompt Card & Audio controls */}
+      {/* 2. Top Prominent Assessment Score Card (Zero-Scroll Visibility) */}
+      {gradeResult && (
+        <div 
+          ref={assessmentCardRef}
+          className="glass-panel-gold rounded-2xl p-6 border border-gold-500/50 shadow-2xl space-y-6 animate-slideDown ring-1 ring-gold-500/20"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-6 border-b border-slate-800 pb-5">
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-slate-950 font-extrabold text-2xl flex items-center justify-center shadow-gold-glow">
+                {gradeResult.score ?? gradeResult.accuracy_score ?? 0}%
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg font-bold text-slate-100">Assessment Score</h3>
+                  <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                    (gradeResult.score ?? gradeResult.accuracy_score ?? 0) >= 80 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                  }`}>
+                    {(gradeResult.score ?? gradeResult.accuracy_score ?? 0) >= 85 ? 'Passed - Mastered' : (gradeResult.score ?? gradeResult.accuracy_score ?? 0) >= 70 ? 'Passed - Needs Revision' : 'Needs Practice'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-1">
+                  Verified against Madani text standard.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 ml-auto">
+              <div className="px-4 py-2 rounded-xl bg-slate-900/90 border border-slate-800 text-center">
+                <span className="block text-[10px] text-slate-400 font-semibold uppercase">Total Words</span>
+                <span className="text-sm font-bold text-slate-100">{totalWords}</span>
+              </div>
+              <div className="px-4 py-2 rounded-xl bg-emerald-950/60 border border-emerald-500/30 text-center">
+                <span className="block text-[10px] text-emerald-400 font-semibold uppercase">Matches</span>
+                <span className="text-sm font-bold text-emerald-300">{matchCount}</span>
+              </div>
+              <div className="px-4 py-2 rounded-xl bg-red-950/60 border border-red-500/30 text-center">
+                <span className="block text-[10px] text-red-400 font-semibold uppercase">Mistakes</span>
+                <span className="text-sm font-bold text-red-300">{mistakeCount}</span>
+              </div>
+              <button
+                onClick={() => updateIkhtebaar({ gradeResult: null })}
+                className="p-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-400 hover:text-white border border-slate-700/80 transition-all ml-2"
+                title="Dismiss Assessment Card"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {gradeResult.user_transcription && (
+            <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Transcribed Output:</span>
+              <p dir="rtl" className="font-arabic text-lg text-amber-200 text-right">{gradeResult.user_transcription}</p>
+            </div>
+          )}
+
+          <div className="space-y-3">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
+              <span>Word-by-Word Assessment</span>
+              <span className="text-gold-400 font-arabic text-sm">التدقيق الحرفي</span>
+            </h4>
+
+            <div 
+              dir="rtl"
+              className="p-6 rounded-2xl bg-slate-950 border border-slate-800 flex flex-wrap justify-start gap-3 text-right leading-loose font-arabic text-2xl"
+            >
+              {gradeResult.comparison?.map((item, idx) => {
+                const isMatch = item.status === 'match' || item.status === 'correct' || item.status === 'bismillah_skipped';
+                return (
+                  <span
+                    key={idx}
+                    className={`inline-flex items-center px-3 py-1.5 rounded-xl border text-xl font-bold transition-all shadow-sm ${
+                      isMatch
+                        ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-300 hover:border-emerald-400'
+                        : 'bg-red-950/70 border-red-500/50 text-red-300 hover:border-red-400 ring-1 ring-red-500/30 animate-pulse'
+                    }`}
+                  >
+                    {item.word}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Question Prompt Card & Audio controls */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         {/* Left Card: Oral Question Prompt */}
         <div className="glass-panel rounded-2xl p-6 border border-gold-500/20 shadow-xl space-y-4">
@@ -663,10 +769,12 @@ export const IkhtebaarTab = () => {
                     </span>
                     <div className="flex items-center gap-3">
                       <button
-                        onClick={handleViewFullPage}
-                        className="px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 font-bold text-[10px] uppercase transition-all shadow-sm"
+                        onClick={() => handleViewFullPage(pageNumber)}
+                        className="px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 font-bold text-[10px] uppercase transition-all shadow-sm flex items-center gap-1.5"
+                        title={`View Mushaf pages from Page ${pageNumber} to Page ${currentQuestion?.end_page_number || pageNumber}`}
                       >
-                        View Whole Page
+                        <BookOpen className="w-3.5 h-3.5" />
+                        <span>View Pages ({pageNumber} → {currentQuestion?.end_page_number || pageNumber})</span>
                       </button>
                       <span className="font-mono text-amber-400 font-bold">Ayah {ayahNumber}</span>
                     </div>
@@ -683,9 +791,19 @@ export const IkhtebaarTab = () => {
                       <span className="w-2 h-2 rounded-full bg-red-400 animate-ping" />
                       Stop At This Verse (End Point):
                     </span>
-                    <span className="font-mono text-red-400 font-bold">
-                      {currentQuestion?.end_surah_name || '...'}, Ayah {currentQuestion?.end_ayah_number || '...'} (Page {currentQuestion?.end_page_number || '...'})
-                    </span>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => handleViewFullPage(currentQuestion?.end_page_number || pageNumber)}
+                        className="px-2.5 py-1 rounded bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/30 font-bold text-[10px] uppercase transition-all shadow-sm flex items-center gap-1.5"
+                        title={`View Stop Verse on Mushaf Page ${currentQuestion?.end_page_number || pageNumber}`}
+                      >
+                        <BookOpen className="w-3.5 h-3.5" />
+                        <span>View Page {currentQuestion?.end_page_number || pageNumber}</span>
+                      </button>
+                      <span className="font-mono text-red-400 font-bold">
+                        {currentQuestion?.end_surah_name || '...'}, Ayah {currentQuestion?.end_ayah_number || '...'} (Page {currentQuestion?.end_page_number || '...'})
+                      </span>
+                    </div>
                   </div>
                   <p dir="rtl" className="font-arabic text-2xl text-red-100/90 text-right leading-loose mt-2">
                     {currentQuestion?.end_arabic_text || currentQuestion?.stop_text || "..."}
@@ -805,14 +923,14 @@ export const IkhtebaarTab = () => {
               <div className="p-4 rounded-xl bg-slate-950 border border-gold-500/40 shadow-gold-glow space-y-3 animate-fadeIn">
                 <div className="flex items-center justify-between text-xs font-bold">
                   <span className="text-gold-300 flex items-center gap-1.5">
-                    <Sparkles className="w-4 h-4 text-amber-400 animate-spin-slow" /> AI Evaluation Pipeline
+                    <Sparkles className="w-4 h-4 text-amber-400 animate-spin-slow" /> Evaluation in Progress
                   </span>
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-amber-400 font-extrabold">{analysisProgress}%</span>
                     <button
                       onClick={abortRecitation}
                       className="p-1 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 transition-all ml-1"
-                      title="Cancel & Abort AI Grading"
+                      title="Cancel Evaluation"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
@@ -828,7 +946,7 @@ export const IkhtebaarTab = () => {
 
                 <div className="text-[11px] text-slate-400 font-medium flex items-center justify-between">
                   <span className="animate-pulse text-slate-300 font-semibold">{analysisStage}</span>
-                  <span className="text-amber-400/80 font-mono text-[10px]">Academic Engine</span>
+                  <span className="text-amber-400/80 font-mono text-[10px]">Live Analysis</span>
                 </div>
               </div>
             ) : !isRecording ? (
@@ -847,22 +965,22 @@ export const IkhtebaarTab = () => {
                   {!isModelReady ? (
                     <>
                       <RefreshCw className="w-5 h-5 animate-spin text-amber-400" />
-                      <span>AI Model Initializing (Loading Weights)...</span>
+                      <span>Engine Initializing...</span>
                     </>
                   ) : (
                     <>
                       <Mic className="w-5 h-5" />
-                      <span>Initiate Recitation</span>
+                      <span>Start Recitation</span>
                     </>
                   )}
                 </button>
 
-                {/* Instant Audio Self-Auditing & Playback Controls */}
+                {/* Audio Self-Auditing & Playback Controls */}
                 {recordedAudioUrl && (
                   <div className="p-4 rounded-xl bg-slate-950/90 border border-gold-500/30 space-y-3 animate-fadeIn shadow-lg">
                     <div className="flex items-center justify-between">
                       <span className="text-[11px] font-bold uppercase tracking-wider text-gold-300 flex items-center gap-1.5">
-                        <Volume2 className="w-3.5 h-3.5 text-amber-400" /> Instant Recitation Audio Playback:
+                        <Volume2 className="w-3.5 h-3.5 text-amber-400" /> Recitation Playback:
                       </span>
                       {/* Playback speed selector */}
                       <div className="flex items-center gap-1 bg-slate-900 px-1.5 py-0.5 rounded-lg border border-slate-800 text-[10px] font-mono">
@@ -894,7 +1012,7 @@ export const IkhtebaarTab = () => {
                         download="ikhtebaar_recitation.wav"
                         className="flex-1 py-2 rounded-xl bg-slate-900 border border-slate-700 hover:bg-slate-800 hover:border-gold-500/40 text-gold-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-sm"
                       >
-                        <Download className="w-3.5 h-3.5" /> Save Audio
+                        <Download className="w-3.5 h-3.5" /> Export Audio
                       </a>
                       <button
                         onClick={() => {
@@ -919,14 +1037,14 @@ export const IkhtebaarTab = () => {
                       onClick={resumeRecitation}
                       className="flex-1 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-slate-950 font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md"
                     >
-                      <Play className="w-4 h-4" /> Resume Stream
+                      <Play className="w-4 h-4" /> Resume
                     </button>
                   ) : (
                     <button
                       onClick={pauseRecitation}
                       className="flex-1 py-3 rounded-xl bg-slate-800 border border-slate-700 hover:bg-slate-700 text-amber-400 font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md"
                     >
-                      <Pause className="w-4 h-4" /> Pause & Check Audio
+                      <Pause className="w-4 h-4" /> Pause
                     </button>
                   )}
 
@@ -934,7 +1052,7 @@ export const IkhtebaarTab = () => {
                   <button
                     onClick={abortRecitation}
                     className="p-3 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 hover:border-red-500/60 transition-all flex items-center justify-center shadow-md shrink-0"
-                    title="Discard Exam Recitation (Cancel without grading)"
+                    title="Discard Recitation"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -945,14 +1063,14 @@ export const IkhtebaarTab = () => {
                   className="w-full py-4 rounded-xl bg-gradient-to-r from-red-500 to-red-600 hover:from-red-400 hover:to-red-500 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-lg shadow-red-500/30 transition-all"
                 >
                   <MicOff className="w-5 h-5" />
-                  <span>Conclude Recitation & Grade Exam</span>
+                  <span>Finish & Evaluate</span>
                 </button>
 
                 {/* Instant Audio Snapshot on Pause */}
                 {isPaused && recordedAudioUrl && (
                   <div className="p-3 rounded-xl bg-slate-950/90 border border-amber-500/40 space-y-2 animate-fadeIn">
                     <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1">
-                      <Volume2 className="w-3 h-3" /> Live Audio Preview (Check Voice Clarity):
+                      <Volume2 className="w-3 h-3" /> Audio Preview:
                     </span>
                     <audio src={recordedAudioUrl} controls className="w-full h-8 accent-amber-500" />
                   </div>
@@ -983,7 +1101,7 @@ export const IkhtebaarTab = () => {
             <div className="p-4 rounded-xl bg-slate-950/85 border border-slate-800 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                  Live Recitation Progress (Stateful Mukhtabir Engine):
+                  Live Recitation Progress:
                 </span>
                 <span className="text-gold-400 font-arabic text-sm" dir="rtl">متابعة التسميع المباشر</span>
               </div>
@@ -1037,7 +1155,7 @@ export const IkhtebaarTab = () => {
                       {isRecording ? (
                         <span className="flex items-center justify-center gap-2 text-amber-400 animate-pulse">
                           <span className="w-2 h-2 rounded-full bg-amber-400"></span>
-                          Listening to recitation... Recite clearly in Arabic
+                          Listening... Recite in Arabic
                         </span>
                       ) : (
                         "Awaiting recitation start..."
@@ -1051,132 +1169,7 @@ export const IkhtebaarTab = () => {
         </div>
       </div>
 
-      {/* 3. Academic Examination Evaluation & Report Card */}
-      {gradeResult && (
-        <div className="glass-panel-gold rounded-2xl p-6 border border-gold-500/40 shadow-2xl space-y-6 animate-fadeIn">
-          <div className="flex flex-wrap items-center justify-between gap-6 border-b border-slate-800 pb-5">
-            <div className="flex items-center gap-4">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-slate-950 font-extrabold text-2xl flex items-center justify-center shadow-gold-glow">
-                {gradeResult.score ?? gradeResult.accuracy_score ?? 0}%
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-lg font-bold text-slate-100">Oral Examination Score</h3>
-                  <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                    (gradeResult.score ?? gradeResult.accuracy_score ?? 0) >= 80 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                  }`}>
-                    {(gradeResult.score ?? gradeResult.accuracy_score ?? 0) >= 85 ? 'Passed - Mastered' : (gradeResult.score ?? gradeResult.accuracy_score ?? 0) >= 70 ? 'Passed - Needs Revision' : 'Needs Practice'}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-400 mt-1">
-                  Exam audio transcribed and verified against Uthmani Quranic text standard.
-                </p>
-              </div>
-            </div>
 
-            <div className="flex items-center gap-4">
-              <div className="px-4 py-2 rounded-xl bg-slate-900/90 border border-slate-800 text-center">
-                <span className="block text-[10px] text-slate-400 font-semibold uppercase">Total Words</span>
-                <span className="text-sm font-bold text-slate-100">{totalWords}</span>
-              </div>
-              <div className="px-4 py-2 rounded-xl bg-emerald-950/60 border border-emerald-500/30 text-center">
-                <span className="block text-[10px] text-emerald-400 font-semibold uppercase">Matches</span>
-                <span className="text-sm font-bold text-emerald-300">{matchCount}</span>
-              </div>
-              <div className="px-4 py-2 rounded-xl bg-red-950/60 border border-red-500/30 text-center">
-                <span className="block text-[10px] text-red-400 font-semibold uppercase">Mistakes</span>
-                <span className="text-sm font-bold text-red-300">{mistakeCount}</span>
-              </div>
-            </div>
-          </div>
-
-          {gradeResult.user_transcription && (
-            <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Recognized Recitation Output:</span>
-              <p dir="rtl" className="font-arabic text-lg text-amber-200 text-right">{gradeResult.user_transcription}</p>
-            </div>
-          )}
-
-          <div className="space-y-3">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
-              <span>Word-by-Word Analysis (Green = Match, Red = Mistake)</span>
-              <span className="text-gold-400 font-arabic text-sm">التدقيق الحرفي</span>
-            </h4>
-
-            <div 
-              dir="rtl"
-              className="p-6 rounded-2xl bg-slate-950 border border-slate-800 flex flex-wrap justify-start gap-3 text-right leading-loose font-arabic text-2xl"
-            >
-              {gradeResult.comparison?.map((item, idx) => {
-                const isMatch = item.status === 'match' || item.status === 'correct' || item.status === 'bismillah_skipped';
-                return (
-                  <span
-                    key={idx}
-                    className={`inline-flex items-center px-3 py-1.5 rounded-xl border text-xl font-bold transition-all shadow-sm ${
-                      isMatch
-                        ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-300 hover:border-emerald-400'
-                        : 'bg-red-950/70 border-red-500/50 text-red-300 hover:border-red-400 ring-1 ring-red-500/30 animate-pulse'
-                    }`}
-                  >
-                    {item.word}
-                  </span>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
-      {showFullPage && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-gold-500/30 rounded-2xl max-w-2xl w-full p-6 shadow-2xl flex flex-col max-h-[90vh]">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
-              <h3 className="font-bold text-slate-100 text-sm">
-                Misri Quran Manuscript — Page {currentQuestion?.page_number}
-              </h3>
-              <button 
-                onClick={() => setShowFullPage(false)}
-                className="text-slate-400 hover:text-white font-bold text-xs bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg transition-all"
-              >
-                Close
-              </button>
-            </div>
-            
-            <div className="flex-1 overflow-y-auto flex items-center justify-center p-2 bg-slate-950 rounded-xl border border-slate-800 min-h-[300px]">
-              {loadingJson ? (
-                <div className="flex items-center gap-2 text-gold-400 text-xs font-bold animate-pulse">
-                  <RefreshCw className="w-4 h-4 animate-spin text-gold-400" />
-                  <span>Loading manuscript database...</span>
-                </div>
-              ) : (() => {
-                const pageData = getPageFromManuscript(quranData, currentQuestion?.page_number);
-                const imageBase64 = pageData?.image_base64 || pageData?.misri_quran || quranData?.[currentQuestion?.page_number]?.misri_quran || "";
-                return imageBase64 ? (
-                  <img 
-                    src={imageBase64} 
-                    alt={`Misri Quran Manuscript Page ${currentQuestion?.page_number}`}
-                    onClick={() => {
-                      const startPage = Number(currentQuestion?.page_number || 1);
-                      const endPage = Number(currentQuestion?.end_page_number || startPage);
-                      const pageRangeList = startPage === endPage ? [startPage] : [startPage, endPage];
-                      
-                      setZoomedPageList(pageRangeList);
-                      const idx = pageRangeList.indexOf(startPage);
-                      setCurrentZoomedIndex(idx >= 0 ? idx : 0);
-                      setIsZoomed(true);
-                    }}
-                    className="max-h-[60vh] object-contain rounded shadow-lg border border-slate-800 animate-fadeIn cursor-pointer transition-all hover:scale-[1.02] hover:border-gold-500/40"
-                    title="Click to enlarge manuscript page"
-                  />
-                ) : (
-                  <div className="text-slate-500 text-xs font-semibold">
-                    Manuscript page data not found for Page {currentQuestion?.page_number}.
-                  </div>
-                );
-              })()}
-            </div>
-          </div>
-        </div>
-      )}
       {isZoomed && zoomedPageList.length > 0 && (
         <div 
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-fadeIn cursor-zoom-out"
@@ -1213,7 +1206,7 @@ export const IkhtebaarTab = () => {
           <div className="relative max-w-full max-h-[90vh] flex flex-col items-center justify-center">
             <button
               onClick={() => setIsZoomed(false)}
-              className="absolute top-4 right-4 z-50 text-white hover:text-red-400 font-extrabold text-lg bg-black/60 hover:bg-black/85 w-10 h-10 rounded-full flex items-center justify-center shadow-lg transition-all"
+              className="absolute top-4 right-4 z-50 text-white hover:text-red-400 font-extrabold text-lg bg-black/60 hover:bg-black/85 w-10 h-10 rounded-full flex items-center justify-center shadow-lg transition-all cursor-pointer"
               title="Close Enlarged View"
             >
               ✕
@@ -1224,9 +1217,6 @@ export const IkhtebaarTab = () => {
               const safeIndex = (currentZoomedIndex >= 0 && currentZoomedIndex < safePageList.length) ? currentZoomedIndex : 0;
               const pageNum = safePageList[safeIndex];
               
-              // Debug logging
-              console.log("Modal active page:", pageNum, "Data:", quranData ? (Array.isArray(quranData) ? quranData.find(item => Number(item?.page_number) === Number(pageNum)) : quranData?.[pageNum]) : "No Quran data");
-              
               if (!pageNum) {
                 return (
                   <div className="text-slate-500 text-xs font-semibold py-8">
@@ -1235,32 +1225,17 @@ export const IkhtebaarTab = () => {
                 );
               }
               
-              const pageData = getPageFromManuscript(quranData, pageNum);
-              const imgUrl = pageData?.image_base64 || pageData?.misri_quran || quranData?.[pageNum]?.misri_quran || quranData?.[pageNum]?.image_base64 || "";
-              
               return (
                 <div className="flex flex-col items-center space-y-2 select-none">
-                  <span className="text-slate-300 font-bold font-mono text-xs bg-slate-950/80 border border-slate-800 px-3 py-1 rounded-full">
+                  <span className="text-slate-300 font-bold font-mono text-xs bg-slate-950/80 border border-slate-800 px-3 py-1 rounded-full shadow-lg">
                     Page {pageNum} ({safeIndex + 1} of {safePageList.length})
                   </span>
-                  {loadingJson ? (
-                    <div className="flex items-center gap-2 text-gold-400 text-xs font-bold animate-pulse py-12">
-                      <RefreshCw className="w-4 h-4 animate-spin text-gold-400" />
-                      <span>Loading page...</span>
-                    </div>
-                  ) : imgUrl ? (
-                    <img
-                      src={imgUrl}
-                      alt={`Enlarged Quran Page ${pageNum}`}
-                      className="max-h-[82vh] max-w-full object-contain rounded-lg shadow-2xl border border-slate-800 cursor-default animate-scaleIn"
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                  ) : (
-                    <div className="text-slate-500 text-xs font-semibold py-12 flex flex-col items-center gap-2">
-                      <span>Manuscript page not found for Page {pageNum}.</span>
-                      <span className="text-[10px] text-slate-600">Please check your manuscript database.</span>
-                    </div>
-                  )}
+                  <img
+                    src={`/api/page_image/${pageNum}`}
+                    alt={`Madani Quran Page ${pageNum}`}
+                    className="max-h-[82vh] max-w-full object-contain rounded-lg shadow-2xl border border-slate-800 cursor-default animate-scaleIn select-none"
+                    onClick={(e) => e.stopPropagation()}
+                  />
                 </div>
               );
             })()}

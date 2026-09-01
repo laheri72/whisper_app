@@ -218,6 +218,22 @@ async def api_logout(request: Request):
 # ==========================================
 # 2. TILAWAT MANUSCRIPT & MAPPING ROUTES
 # ==========================================
+@app.get("/api/page_image/{page_number}")
+async def get_page_image(page_number: int):
+    if page_number < 1 or page_number > 604:
+        raise HTTPException(status_code=404, detail="Page number out of range (1-604)")
+    
+    file_path = f"quran_pages/{page_number}.jpg"
+    if os.path.exists(file_path):
+        return FileResponse(
+            file_path,
+            media_type="image/jpeg",
+            headers={
+                "Cache-Control": "public, max-age=31536000, immutable"
+            }
+        )
+    raise HTTPException(status_code=404, detail="Page image not found")
+
 @app.get("/api/page_boxes/{page_number}")
 async def get_page_boxes(page_number: int):
     try:

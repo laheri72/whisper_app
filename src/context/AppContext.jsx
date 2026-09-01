@@ -53,21 +53,9 @@ export const AppProvider = ({ children }) => {
   }, [checkModelStatus]);
 
   const fetchQuranData = async () => {
-    if (quranData) return quranData;
-    setLoadingJson(true);
-    try {
-      const res = await fetch('/data/quran_data.json');
-      if (res.ok) {
-        const data = await res.json();
-        setQuranData(data);
-        setLoadingJson(false);
-        return data;
-      }
-    } catch (err) {
-      console.error("Failed to load quran_data.json:", err);
-    }
+    // High-speed direct image streaming via /api/page_image/{page} replaces monolithic 370MB JSON download
     setLoadingJson(false);
-    return null;
+    return [];
   };
 
   // 1. Tilawat Tab Persistent State
@@ -81,8 +69,8 @@ export const AppProvider = ({ children }) => {
     selectedJuz: 1,
     fromPage: 1,
     toPage: 21,
-    startSurah: 1,
-    endSurah: 1,
+    startSurah: 112,
+    endSurah: 112,
     expectedText: '',
     paginatedPages: [],
     activePageIndex: 0,
@@ -102,8 +90,8 @@ export const AppProvider = ({ children }) => {
     selectedJuz: 1,
     fromPage: 1,
     toPage: 21,
-    startSurah: 1,
-    endSurah: 1,
+    startSurah: 112,
+    endSurah: 112,
     difficulty: 'easy',
     currentQuestion: null,
     excludedQuestions: [],

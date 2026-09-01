@@ -6,39 +6,39 @@ export const Sidebar = ({ activeTab, setActiveTab, user }) => {
   const navItems = [
     {
       id: 'tilawat',
-      label: 'Tilawat Reading',
+      label: 'Tilawat',
       arabic: 'الـتـلاوة',
       icon: BookOpen,
-      badge: 'Manuscript',
+      badge: 'Reading',
       color: 'from-amber-500/20 to-amber-600/10 text-amber-400 border-amber-500/30',
-      description: 'Page manuscript & audio recitation'
+      description: 'Digital Mushaf & Verse Audio'
     },
     {
       id: 'tasmee',
-      label: 'Tasmee Recitation',
+      label: 'Tasmee',
       arabic: 'التسميع المباشر',
       icon: Mic,
-      badge: 'Evaluation',
+      badge: 'Recitation',
       color: 'from-emerald-500/20 to-emerald-600/10 text-emerald-400 border-emerald-500/30',
-      description: 'Recitation memorization test'
+      description: 'Live Oral Recitation Assessment'
     },
     {
       id: 'ikhtebaar',
-      label: 'Ikhtebaar Testing',
+      label: 'Ikhtebaar',
       arabic: 'الاختبار الأكاديمي',
       icon: Award,
-      badge: 'Exam Mode',
+      badge: 'Exam',
       color: 'from-blue-500/20 to-blue-600/10 text-blue-400 border-blue-500/30',
-      description: 'Academic oral evaluation & hints'
+      description: 'Structured Oral Examination'
     },
     {
       id: 'analytics',
-      label: 'Talabat Analytics',
+      label: 'Performance',
       arabic: 'لوحة الأداء',
       icon: Activity,
-      badge: 'Metrics',
+      badge: 'Reports',
       color: 'from-purple-500/20 to-purple-600/10 text-purple-400 border-purple-500/30',
-      description: 'Progress heatmap & mistake queue'
+      description: 'Student Analytics & Juz Heatmap'
     }
   ];
 
@@ -57,11 +57,11 @@ export const Sidebar = ({ activeTab, setActiveTab, user }) => {
           <div className="flex flex-col">
             <div className="flex items-center gap-1.5">
               <h1 className="font-extrabold text-base tracking-wide gold-gradient-text">
-                Academic Quran
+                Quranic Portal
               </h1>
             </div>
             <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400 tracking-wider uppercase">
-              Portal of Recitation Suite
+              Department of Quranic Studies
             </span>
           </div>
         </div>
@@ -69,8 +69,8 @@ export const Sidebar = ({ activeTab, setActiveTab, user }) => {
         {/* User Profile Component Section */}
         <div>
           <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 px-2 mb-1.5 flex items-center justify-between">
-            <span>Talabat Identification</span>
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+            <span>Student Profile</span>
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
           </div>
           <UserProfile user={user} compact={false} />
         </div>
@@ -78,7 +78,7 @@ export const Sidebar = ({ activeTab, setActiveTab, user }) => {
         {/* Navigation Section */}
         <div className="space-y-1 pt-1">
           <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 px-2 mb-1.5">
-            Academic Modules
+            Navigation
           </div>
 
           {navItems.map((item) => {
