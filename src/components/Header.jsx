@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, Mic, Award, Activity, Sparkles, Clock, Globe, Sun, Moon, LogOut, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
+import { BookOpen, Mic, Award, Activity, Sparkles, Settings, Clock, Globe, Sun, Moon, LogOut, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export const Header = ({ activeTab, user, theme, toggleTheme, handleLogout }) => {
@@ -13,8 +13,12 @@ export const Header = ({ activeTab, user, theme, toggleTheme, handleLogout }) =>
         return { title: 'Tasmee', subtitle: 'Oral Recitation Assessment', icon: Mic };
       case 'ikhtebaar':
         return { title: 'Ikhtebaar', subtitle: 'Oral Examination & Testing', icon: Award };
+      case 'mutashabehat':
+        return { title: 'Mutashabehat', subtitle: 'Verbal Similarity Analysis & Cross-Referencing', icon: Sparkles };
       case 'analytics':
         return { title: 'Performance Analytics', subtitle: 'Student Records & Juz Retention Heatmap', icon: Activity };
+      case 'settings':
+        return { title: 'Academic Profile & Settings', subtitle: 'Student Profile, Password & Typography Preferences', icon: Settings };
       default:
         return { title: 'Quranic Portal', subtitle: 'Department of Quranic Studies', icon: Sparkles };
     }
@@ -85,9 +89,19 @@ export const Header = ({ activeTab, user, theme, toggleTheme, handleLogout }) =>
 
         {/* User Badge Pill */}
         <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-900/90 border border-slate-200 dark:border-gold-500/30 shadow-sm">
-          <div className="w-7 h-7 rounded-lg bg-amber-500 text-slate-950 font-bold text-xs flex items-center justify-center">
-            {user.initials}
-          </div>
+          {user.profilePhoto ? (
+            <div className="w-7 h-7 min-w-[28px] max-w-[28px] min-h-[28px] max-h-[28px] rounded-lg overflow-hidden shrink-0 border border-amber-500/50">
+              <img 
+                src={user.profilePhoto} 
+                alt={user.name} 
+                className="w-full h-full object-cover shrink-0 block" 
+              />
+            </div>
+          ) : (
+            <div className="w-7 h-7 min-w-[28px] max-w-[28px] min-h-[28px] max-h-[28px] rounded-lg bg-amber-500 text-slate-950 font-bold text-xs flex items-center justify-center shrink-0">
+              {user.initials}
+            </div>
+          )}
           <div className="flex flex-col text-left">
             <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 leading-none">
               {user.name}

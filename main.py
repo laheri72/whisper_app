@@ -76,6 +76,12 @@ app.mount("/audio", StaticFiles(directory="audio"), name="audio")
 
 templates = Jinja2Templates(directory="templates")
 
+@app.get("/vite.svg")
+@app.get("/favicon.ico")
+async def get_portal_favicon():
+    svg_icon = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"/><path d="M6 6h10"/><path d="M6 10h10"/></svg>"""
+    return Response(content=svg_icon, media_type="image/svg+xml")
+
 # ==========================================
 # 1. AUTHENTICATION ROUTES
 # ==========================================
@@ -143,51 +149,89 @@ async def get_current_user(request: Request):
     
     conn = sqlite3.connect("users.db")
     cursor = conn.cursor()
-    cursor.execute("CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, display_name TEXT)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, display_name TEXT, profile_photo TEXT)")
     
     cursor.execute("PRAGMA table_info(users)")
     columns = [info[1] for info in cursor.fetchall()]
     if "display_name" not in columns:
         cursor.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
-        conn.commit()
+    if "profile_photo" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN profile_photo TEXT")
+    conn.commit()
         
-    cursor.execute("SELECT display_name FROM users WHERE username = ?", (username,))
+    cursor.execute("SELECT display_name, profile_photo FROM users WHERE username = ?", (username,))
     row = cursor.fetchone()
     display_name = row[0] if row else None
+    profile_photo = row[1] if row and len(row) > 1 else None
     conn.close()
     
     return {
         "id": username,
         "username": username,
         "display_name": display_name,
+        "profile_photo": profile_photo,
         "is_first_login": display_name is None or display_name.strip() == ""
     }
 
 @app.post("/api/update_profile")
+@app.post("/api/user/update-profile")
 async def update_profile(request: Request, data: dict):
     username = request.session.get("user")
     if not username:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
-    display_name = data.get("display_name")
-    if not display_name or not display_name.strip():
+    display_name = data.get("display_name", "").strip()
+    profile_photo = data.get("profile_photo", "")
+    
+    if not display_name:
         raise HTTPException(status_code=400, detail="Display name is required")
         
     conn = sqlite3.connect("users.db")
     cursor = conn.cursor()
-    cursor.execute("CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, display_name TEXT)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, display_name TEXT, profile_photo TEXT)")
     
     cursor.execute("PRAGMA table_info(users)")
     columns = [info[1] for info in cursor.fetchall()]
     if "display_name" not in columns:
         cursor.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
-        conn.commit()
+    if "profile_photo" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN profile_photo TEXT")
+    conn.commit()
         
-    cursor.execute("UPDATE users SET display_name = ? WHERE username = ?", (display_name.strip(), username))
+    if profile_photo:
+        cursor.execute("UPDATE users SET display_name = ?, profile_photo = ? WHERE username = ?", (display_name, profile_photo, username))
+    else:
+        cursor.execute("UPDATE users SET display_name = ? WHERE username = ?", (display_name, username))
     conn.commit()
     conn.close()
     
-    return {"status": "success", "display_name": display_name.strip()}
+    return {"status": "success", "display_name": display_name}
+
+@app.post("/api/user/change-password")
+async def user_change_password(request: Request, data: dict):
+    username = request.session.get("user")
+    if not username:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    current_password = data.get("current_password", "")
+    new_password = data.get("new_password", "")
+    
+    if not new_password or len(new_password) < 5:
+        raise HTTPException(status_code=400, detail="New password must be at least 5 characters long.")
+        
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT password FROM users WHERE username = ?", (username,))
+    row = cursor.fetchone()
+    if not row or row[0] != current_password:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Current password entered is incorrect.")
+        
+    cursor.execute("UPDATE users SET password = ? WHERE username = ?", (new_password, username))
+    conn.commit()
+    conn.close()
+    
+    return {"status": "success"}
 
 @app.post("/api/login")
 async def api_login(request: Request, data: dict):
@@ -335,6 +379,66 @@ async def get_ayah_info(global_id: int):
             "page": page
         }
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+_cached_quran_simple = None
+
+def get_page_for_juz(page: int) -> int:
+    if page <= 21:
+        return 1
+    if page >= 582:
+        return 30
+    return min(30, max(1, 2 + (page - 22) // 20))
+
+@app.get("/api/quran-simple")
+async def get_quran_simple():
+    global _cached_quran_simple
+    if _cached_quran_simple is not None:
+        return _cached_quran_simple
+
+    try:
+        # 1. Map surah + ayah -> page from file1.db
+        conn_map = sqlite3.connect("file1.db")
+        c_map = conn_map.cursor()
+        c_map.execute("SELECT sura_number, ayah_number, page_number FROM glyphs_publication_1 GROUP BY sura_number, ayah_number")
+        page_map = {(row[0], row[1]): row[2] for row in c_map.fetchall()}
+        conn_map.close()
+
+        # 2. Get text from file2.db
+        conn_text = sqlite3.connect("file2.db")
+        c_text = conn_text.cursor()
+        c_text.execute("PRAGMA table_info(quran_text)")
+        columns = [info[1] for info in c_text.fetchall()]
+        text_col = next((col for col in ["text_uthmani", "text", "ayah_text", "content", "ar"] if col in columns), "text")
+
+        c_text.execute(f"SELECT surah_number, ayah_number, {text_col} FROM quran_text ORDER BY surah_number, ayah_number")
+        rows = c_text.fetchall()
+        conn_text.close()
+
+        surahs_dict = {}
+        for s_num in range(1, 115):
+            name = SURAH_NAMES[s_num] if s_num < len(SURAH_NAMES) else f"Surah {s_num}"
+            surahs_dict[s_num] = {
+                "number": s_num,
+                "englishName": name,
+                "ayahs": []
+            }
+
+        for surah_num, ayah_num, text in rows:
+            if surah_num in surahs_dict:
+                page = page_map.get((surah_num, ayah_num), 1)
+                juz = get_page_for_juz(page)
+                surahs_dict[surah_num]["ayahs"].append({
+                    "numberInSurah": ayah_num,
+                    "text": text or "",
+                    "page": page,
+                    "juz": juz
+                })
+
+        _cached_quran_simple = list(surahs_dict.values())
+        return _cached_quran_simple
+    except Exception as e:
+        logger.error(f"Error building quran-simple: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

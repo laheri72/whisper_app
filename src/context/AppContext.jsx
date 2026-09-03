@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 
 const AppContext = createContext();
 
-export const AppProvider = ({ children }) => {
+export const AppProvider = ({ children, onSetActiveTab }) => {
   // Shared global quran_data.json states
   const [quranData, setQuranData] = useState(null);
   const [loadingJson, setLoadingJson] = useState(false);
@@ -58,6 +58,33 @@ export const AppProvider = ({ children }) => {
     return [];
   };
 
+  // Quran Simple text cache (used by MutashabehatTab)
+  const [quranSimple, setQuranSimple] = useState(null);
+  const [loadingSimple, setLoadingSimple] = useState(false);
+
+  const fetchQuranSimple = useCallback(async () => {
+    if (quranSimple) return;
+    setLoadingSimple(true);
+    try {
+      const res = await fetch('/api/quran-simple');
+      if (res.ok) {
+        const data = await res.json();
+        setQuranSimple(data);
+      } else {
+        console.error('Failed to fetch quran-simple:', res.status);
+      }
+    } catch (err) {
+      console.error('fetchQuranSimple error:', err);
+    } finally {
+      setLoadingSimple(false);
+    }
+  }, [quranSimple]);
+
+  // Cross-tab navigation — delegates to App.jsx setActiveTab via prop
+  const setActiveTab = (tabId) => {
+    if (onSetActiveTab) onSetActiveTab(tabId);
+  };
+
   // 1. Tilawat Tab Persistent State
   const [tilawatState, setTilawatState] = useState({
     pageNumber: 1
@@ -105,6 +132,20 @@ export const AppProvider = ({ children }) => {
     isPaused: false
   });
 
+  // 4. Mutashabehat Tab Persistent State
+  const [mutashabehatState, setMutashabehatState] = useState({
+    surahNum: 1,
+    ayahNum: 1,
+    targetVerse: null,
+    selectedWords: new Set(),
+    matches: [],
+    hasSearched: false,
+    scopeMode: 'juz',
+    selectedJuz: [],
+    selectedSurahs: [],
+    pageRange: { start: 1, end: 604 }
+  });
+
   // Helper methods to modify states support functional updates
   const updateTilawat = (update) => {
     setTilawatState(prev => ({
@@ -127,6 +168,13 @@ export const AppProvider = ({ children }) => {
     }));
   };
 
+  const updateMutashabehat = (update) => {
+    setMutashabehatState(prev => ({
+      ...prev,
+      ...(typeof update === 'function' ? update(prev) : update)
+    }));
+  };
+
   return (
     <AppContext.Provider value={{
       quranData,
@@ -138,12 +186,18 @@ export const AppProvider = ({ children }) => {
       modelName,
       modelError,
       checkModelStatus,
+      setActiveTab,
+      quranSimple,
+      loadingSimple,
+      fetchQuranSimple,
       tilawatState,
       updateTilawat,
       tasmeeState,
       updateTasmee,
       ikhtebaarState,
-      updateIkhtebaar
+      updateIkhtebaar,
+      mutashabehatState,
+      updateMutashabehat
     }}>
       {children}
     </AppContext.Provider>

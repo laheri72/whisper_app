@@ -15,8 +15,12 @@ export const UserProfile = ({
   if (compact) {
     return (
       <div className="flex items-center gap-3 p-2 rounded-xl bg-slate-100 dark:bg-slate-900/60 border border-slate-200 dark:border-gold-500/20 hover:border-slate-300 dark:hover:border-gold-500/40 transition-all">
-        <div className="relative flex items-center justify-center w-10 h-10 rounded-lg bg-gradient-to-br from-amber-500 to-amber-700 text-slate-950 font-bold text-sm shadow-md">
-          {user.initials}
+        <div className="relative flex items-center justify-center w-10 h-10 min-w-[40px] max-w-[40px] min-h-[40px] max-h-[40px] shrink-0 rounded-lg overflow-hidden bg-gradient-to-br from-amber-500 to-amber-700 text-slate-950 font-bold text-sm shadow-md">
+          {user.profilePhoto ? (
+            <img src={user.profilePhoto} alt={user.name} className="w-full h-full object-cover shrink-0 block" />
+          ) : (
+            user.initials
+          )}
           <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-500 border-2 border-slate-200 dark:border-slate-900" />
         </div>
         <div className="flex-1 min-w-0">
@@ -41,11 +45,15 @@ export const UserProfile = ({
       
       <div className="relative z-10 flex items-start gap-4">
         {/* User Initials Avatar */}
-        <div className="relative flex-shrink-0">
-          <div className="w-13 h-13 rounded-2xl bg-gradient-to-br from-amber-400 via-amber-600 to-amber-800 text-slate-950 font-extrabold text-lg flex items-center justify-center shadow-gold-glow border border-amber-300/40">
-            {user.initials}
+        <div className="relative flex-shrink-0 w-12 h-12 min-w-[48px] max-w-[48px] min-h-[48px] max-h-[48px]">
+          <div className="w-12 h-12 min-w-[48px] max-w-[48px] min-h-[48px] max-h-[48px] rounded-2xl overflow-hidden bg-gradient-to-br from-amber-400 via-amber-600 to-amber-800 text-slate-950 font-extrabold text-lg flex items-center justify-center shadow-gold-glow border border-amber-300/40 shrink-0">
+            {user.profilePhoto ? (
+              <img src={user.profilePhoto} alt={user.name} className="w-full h-full object-cover shrink-0 block" />
+            ) : (
+              user.initials
+            )}
           </div>
-          <div className="absolute -bottom-1 -right-1 p-0.5 rounded-full bg-slate-100 dark:bg-slate-955">
+          <div className="absolute -bottom-1 -right-1 p-0.5 rounded-full bg-slate-100 dark:bg-slate-955 z-10">
             <CheckCircle2 className="w-4 h-4 text-emerald-500 dark:text-emerald-400 fill-emerald-50 dark:fill-emerald-950" />
           </div>
         </div>

@@ -7,6 +7,8 @@ import { TilawatTab } from './components/TilawatTab';
 import { TasmeeTab } from './components/TasmeeTab';
 import { IkhtebaarTab } from './components/IkhtebaarTab';
 import { AnalyticsTab } from './components/AnalyticsTab';
+import { MutashabehatTab } from './components/MutashabehatTab';
+import { SettingsTab } from './components/SettingsTab';
 import { RefreshCw } from 'lucide-react';
 import { AppProvider } from './context/AppContext';
 
@@ -111,13 +113,14 @@ export function App() {
     id: user.username,
     name: user.display_name || user.username,
     initials: computedUserInitials,
+    profilePhoto: user.profile_photo || '',
     badge: "Registered User"
   };
 
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme }}>
-      <AuthContext.Provider value={{ user: userProfileData, handleLogout }}>
-        <AppProvider>
+      <AuthContext.Provider value={{ user: userProfileData, handleLogout, checkUserSession }}>
+        <AppProvider onSetActiveTab={setActiveTab}>
           {/* Core Layout wrapper with strict height & width limits to solve blank screen issues */}
           <div className="h-screen w-screen flex overflow-hidden bg-slate-50 text-slate-800 dark:bg-slate-950 dark:text-slate-100 transition-colors duration-200">
             
@@ -154,8 +157,14 @@ export function App() {
                   <div className={activeTab === 'ikhtebaar' ? 'block' : 'hidden'}>
                     <IkhtebaarTab />
                   </div>
+                  <div className={activeTab === 'mutashabehat' ? 'block' : 'hidden'}>
+                    <MutashabehatTab />
+                  </div>
                   <div className={activeTab === 'analytics' ? 'block' : 'hidden'}>
                     <AnalyticsTab />
+                  </div>
+                  <div className={activeTab === 'settings' ? 'block' : 'hidden'}>
+                    <SettingsTab />
                   </div>
                 </div>
               </main>

@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, Mic, Award, GraduationCap, ChevronRight, Activity, Database } from 'lucide-react';
+import { BookOpen, Mic, Award, GraduationCap, ChevronRight, Activity, Database, Sparkles, Settings } from 'lucide-react';
 import { UserProfile } from './UserProfile';
 
 export const Sidebar = ({ activeTab, setActiveTab, user }) => {
@@ -32,6 +32,15 @@ export const Sidebar = ({ activeTab, setActiveTab, user }) => {
       description: 'Structured Oral Examination'
     },
     {
+      id: 'mutashabehat',
+      label: 'Mutashabehat',
+      arabic: 'المتشابهات',
+      icon: Sparkles,
+      badge: 'Finder',
+      color: 'from-amber-500/20 to-emerald-600/10 text-emerald-400 border-emerald-500/30',
+      description: 'Verbal Similarity Analysis'
+    },
+    {
       id: 'analytics',
       label: 'Performance',
       arabic: 'لوحة الأداء',
@@ -39,6 +48,15 @@ export const Sidebar = ({ activeTab, setActiveTab, user }) => {
       badge: 'Reports',
       color: 'from-purple-500/20 to-purple-600/10 text-purple-400 border-purple-500/30',
       description: 'Student Analytics & Juz Heatmap'
+    },
+    {
+      id: 'settings',
+      label: 'Settings',
+      arabic: 'الإعدادات',
+      icon: Settings,
+      badge: 'Profile',
+      color: 'from-slate-500/20 to-slate-600/10 text-slate-400 border-slate-500/30',
+      description: 'Profile & Portal Preferences'
     }
   ];
 
