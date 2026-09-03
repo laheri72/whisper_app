@@ -134,6 +134,9 @@ export const AppProvider = ({ children, onSetActiveTab }) => {
 
   // 4. Mutashabehat Tab Persistent State
   const [mutashabehatState, setMutashabehatState] = useState({
+    searchMode: 'verse', // 'verse' | 'keyword'
+    keywordQuery: '',
+    keywordMatchType: 'phrase', // 'phrase' | 'all' | 'any'
     surahNum: 1,
     ayahNum: 1,
     targetVerse: null,
