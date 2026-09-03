@@ -196,29 +196,35 @@ def init_whisper_model():
 def normalize_arabic(text: str) -> str:
     """
     Normalizes Arabic text by converting Uthmani script symbols, stripping all Harakat/Tashkeel,
-    unifying Alif variants, and mapping Uthmani spelling variants for 100% accurate letter matching.
+    unifying Alif and Hamza variants, and mapping Uthmani spelling variants for 100% accurate letter matching.
     """
     if not text:
         return ""
     # 1. Convert Alif Khanjariya (dagger Alif \u0670) to explicit Alif 'ا' BEFORE stripping harakat
     text = re.sub(r'\u0670', 'ا', text)
-    # 2. Strip all Tashkeel / Harakat and Quranic waqf marks
+    # 2. Strip Quranic small Silah letters (\u06E5 small waw, \u06E6 small ya)
+    text = re.sub(r'[\u06E5\u06E6]', '', text)
+    # 3. Strip all Tashkeel / Harakat and Quranic waqf marks
     text = re.sub(r'[\u0610-\u061A\u064B-\u065F\u06D6-\u06DC\u06DF-\u06E8\u06EA-\u06ED]', '', text)
-    # 3. Normalize Alif forms (أ, إ, آ, ٱ -> ا)
+    # 4. Normalize Alif forms (أ, إ, آ, ٱ -> ا)
     text = re.sub(r'[أإآٱ]', 'ا', text)
-    # 4. Normalize Alef Maqsoora / Ya (ى -> ي)
+    # 5. Normalize Hamza variants (ؤ -> و, ئ -> ي, ء -> '')
+    text = re.sub(r'ؤ', 'و', text)
+    text = re.sub(r'ئ', 'ي', text)
+    text = re.sub(r'ء', '', text)
+    # 6. Normalize Alef Maqsoora / Ya (ى -> ي)
     text = re.sub(r'ى', 'ي', text)
-    # 5. Normalize Ta Marbouta / Ha (ة -> ه)
+    # 7. Normalize Ta Marbouta / Ha (ة -> ه)
     text = re.sub(r'ة', 'ه', text)
-    # 6. Normalize common Uthmani vs Standard spelling variants
+    # 8. Normalize common Uthmani vs Standard spelling variants
     text = re.sub(r'الرحمان', 'الرحمن', text)
     text = re.sub(r'صلوة', 'صلاة', text)
     text = re.sub(r'زكوة', 'زكاة', text)
     text = re.sub(r'سماوات', 'سموات', text)
-    # 7. Remove non-Arabic punctuation, digits, brackets & Uthmani symbols
+    # 9. Remove non-Arabic punctuation, digits, brackets & Uthmani symbols
     text = re.sub(r'[^\w\s\u0600-\u06FF]', '', text)
     text = re.sub(r'[0-9\u0660-\u0669]', '', text)
-    # 8. Remove Tatweel
+    # 10. Remove Tatweel
     text = re.sub(r'ـ', '', text)
     return text.strip()
 
@@ -545,8 +551,9 @@ def compare_recitation(expected_text: str, user_transcription: str):
 
 def align_recited_words(expected_words: list, recited_words: list, max_window: int = 0) -> list[int]:
     """
-    Monotonically aligns recited words against expected words using phonetic, Tajweed,
-    and compound multi-word matching.
+    Monotonically aligns recited words against expected words using Global Dynamic Programming (LCS)
+    with Tajweed phonetic equivalence, consonant cluster mapping, and compound multi-word merging.
+    Immune to leading Ta'awwudh/Basmalah, false early latching, and greedy pitfalls.
     Returns a list of integer indices in expected_words that were correctly recited.
     """
     if not expected_words or not recited_words:
@@ -555,49 +562,78 @@ def align_recited_words(expected_words: list, recited_words: list, max_window: i
     norm_exp = [normalize_arabic(w) for w in expected_words]
     norm_rec = [normalize_arabic(w) for w in recited_words if normalize_arabic(w)]
 
-    search_len = min(len(norm_exp), max_window) if max_window > 0 else len(norm_exp)
+    if max_window > 0 and max_window < len(norm_exp):
+        norm_exp = norm_exp[:max_window]
+
+    n = len(norm_exp)
+    m = len(norm_rec)
+
+    if n == 0 or m == 0:
+        return []
+
+    # dp[i][j] stores the maximum alignment score between norm_exp[:i] and norm_rec[:j]
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    choice = [[None] * (m + 1) for _ in range(n + 1)]
+
+    for i in range(1, n + 1):
+        exp_w = norm_exp[i - 1]
+        next_exp_w = norm_exp[i] if i < n else ""
+
+        for j in range(1, m + 1):
+            rec_w = norm_rec[j - 1]
+
+            # Option 1: Skip expected word (deletion)
+            best_score = dp[i - 1][j]
+            best_choice = ('skip_exp', i - 1, j)
+
+            # Option 2: Skip recited word (insertion/noise/bismillah)
+            if dp[i][j - 1] > best_score:
+                best_score = dp[i][j - 1]
+                best_choice = ('skip_rec', i, j - 1)
+
+            # Option 3: 1-to-1 phonetic match
+            if are_words_phonetically_equivalent(exp_w, rec_w):
+                score = dp[i - 1][j - 1] + 10
+                if score > best_score:
+                    best_score = score
+                    best_choice = ('match_1_1', i - 1, j - 1, [i - 1])
+
+            # Option 4: 2-to-1 compound match (exp[i-1] + exp[i] == rec[j-1])
+            if next_exp_w and are_words_phonetically_equivalent(exp_w + next_exp_w, rec_w):
+                score = dp[i - 1][j - 1] + 20
+                if score > best_score:
+                    best_score = score
+                    best_choice = ('match_2_1', i - 1, j - 1, [i - 1, i])
+
+            # Option 5: 1-to-2 split match (exp[i-1] == rec[j-2] + rec[j-1])
+            if j >= 2:
+                prev_rec_w = norm_rec[j - 2]
+                if are_words_phonetically_equivalent(exp_w, prev_rec_w + rec_w):
+                    score = dp[i - 1][j - 2] + 10
+                    if score > best_score:
+                        best_score = score
+                        best_choice = ('match_1_2', i - 1, j - 2, [i - 1])
+
+            dp[i][j] = best_score
+            choice[i][j] = best_choice
+
+    # Backtrack along optimal path
     matched_indices = set()
-    curr_exp_idx = 0
-    rec_idx = 0
-
-    while rec_idx < len(norm_rec) and curr_exp_idx < search_len:
-        r_w = norm_rec[rec_idx]
-        next_r_w = norm_rec[rec_idx + 1] if rec_idx + 1 < len(norm_rec) else ""
-        lookahead = min(search_len, curr_exp_idx + 8)
-        found = False
-
-        for i in range(curr_exp_idx, lookahead):
-            exp_w = norm_exp[i]
-            next_exp_w = norm_exp[i + 1] if i + 1 < len(norm_exp) else ""
-
-            # 1. Direct 1-to-1 phonetic match
-            if are_words_phonetically_equivalent(exp_w, r_w):
-                matched_indices.add(i)
-                curr_exp_idx = i + 1
-                rec_idx += 1
-                found = True
-                break
-
-            # 2. 2-to-1 compound match: Expected ["اوحي", "لها"] -> Recited "اوحالها" / "اوهانها"
-            if next_exp_w and are_words_phonetically_equivalent(exp_w + next_exp_w, r_w):
-                matched_indices.add(i)
-                matched_indices.add(i + 1)
-                curr_exp_idx = i + 2
-                rec_idx += 1
-                found = True
-                break
-
-            # 3. 1-to-2 split match: Expected "يومئذ" -> Recited ["يوم", "اذ"]
-            if next_r_w and are_words_phonetically_equivalent(exp_w, r_w + next_r_w):
-                matched_indices.add(i)
-                curr_exp_idx = i + 1
-                rec_idx += 2
-                found = True
-                break
-
-        if not found:
-            # Advance recited pointer if no match found within window
-            rec_idx += 1
+    curr_i, curr_j = n, m
+    while curr_i > 0 and curr_j > 0:
+        c = choice[curr_i][curr_j]
+        if not c:
+            break
+        action = c[0]
+        if action in ('match_1_1', 'match_2_1', 'match_1_2'):
+            matched_indices.update(c[3])
+            curr_i, curr_j = c[1], c[2]
+        elif action == 'skip_exp':
+            curr_i = c[1]
+        elif action == 'skip_rec':
+            curr_j = c[2]
+        else:
+            break
 
     return sorted(list(matched_indices))
 

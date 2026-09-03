@@ -1870,6 +1870,131 @@ async def get_juz_retention_map(request: Request, juz: int = 1):
         print(f"Retention map error: {e}")
         return {"error": str(e), "verses": [], "mistakes": []}
 
+@app.get("/api/analytics/range_retention")
+async def get_range_retention_map(request: Request, start_page: int = 1, end_page: int = 1):
+    """
+    Returns the comprehensive verse-level retention status for any custom page range (such as a specific Surah or page span).
+    Includes states: 'active_mistake' (Red), 'cured' (Yellow), 'mastered' (Green), 'unattempted'.
+    """
+    try:
+        username = request.session.get("user") or "guest"
+        sp = max(1, min(604, int(start_page)))
+        ep = max(sp, min(604, int(end_page)))
+
+        conn_map = sqlite3.connect("file1.db")
+        cursor_map = conn_map.cursor()
+        cursor_map.execute("""
+            SELECT DISTINCT page_number, sura_number, ayah_number 
+            FROM glyphs_publication_1 
+            WHERE page_number BETWEEN ? AND ?
+            ORDER BY page_number, sura_number, ayah_number
+        """, (sp, ep))
+        range_verses = cursor_map.fetchall()
+        conn_map.close()
+
+        conn_text = sqlite3.connect("file2.db")
+        cursor_text = conn_text.cursor()
+        cursor_text.execute("PRAGMA table_info(quran_text)")
+        columns = [info[1] for info in cursor_text.fetchall()]
+        text_col = next((col for col in ["text_uthmani", "text", "ayah_text", "content", "ar"] if col in columns), "text")
+
+        verse_texts = {}
+        for p, s, a in range_verses:
+            cursor_text.execute(f"SELECT {text_col} FROM quran_text WHERE surah_number = ? AND ayah_number = ?", (s, a))
+            row = cursor_text.fetchone()
+            verse_texts[(s, a)] = row[0] if row else ""
+        conn_text.close()
+
+        conn_users = sqlite3.connect("users.db")
+        cursor_users = conn_users.cursor()
+        cursor_users.execute("""
+            SELECT surah_number, ayah_number, current_status, consecutive_passes, total_attempts, active_mistake_words, last_attempt_timestamp, last_cured_timestamp
+            FROM ayah_retention_state
+            WHERE username = ?
+        """, (username,))
+        state_rows = cursor_users.fetchall()
+        conn_users.close()
+
+        user_states = {}
+        for r in state_rows:
+            user_states[(r[0], r[1])] = {
+                "current_status": r[2],
+                "consecutive_passes": r[3],
+                "total_attempts": r[4],
+                "active_mistake_words": json.loads(r[5]) if r[5] else [],
+                "last_attempt_timestamp": r[6],
+                "last_cured_timestamp": r[7]
+            }
+
+        mastered_count = 0
+        cured_count = 0
+        active_mistake_count = 0
+        unattempted_count = 0
+
+        verses_list = []
+        mistake_pages = set()
+        cured_pages = set()
+
+        for p_num, s_num, a_num in range_verses:
+            v_state = user_states.get((s_num, a_num))
+            st = v_state["current_status"] if v_state else "unattempted"
+            attempts = v_state["total_attempts"] if v_state else 0
+            passes = v_state["consecutive_passes"] if v_state else 0
+            missed_words = v_state["active_mistake_words"] if v_state else []
+            last_ts = v_state["last_attempt_timestamp"] if v_state else None
+            cured_ts = v_state["last_cured_timestamp"] if v_state else None
+
+            if st == "mastered":
+                mastered_count += 1
+            elif st == "cured":
+                cured_count += 1
+                cured_pages.add(p_num)
+            elif st == "active_mistake":
+                active_mistake_count += 1
+                mistake_pages.add(p_num)
+            else:
+                unattempted_count += 1
+
+            s_name = SURAH_NAMES[s_num] if 1 <= s_num <= 114 else f"Surah {s_num}"
+            verses_list.append({
+                "page_number": p_num,
+                "surah_number": s_num,
+                "surah_name": s_name,
+                "ayah_number": a_num,
+                "status": st,
+                "total_attempts": attempts,
+                "consecutive_passes": passes,
+                "active_mistake_words": missed_words,
+                "last_attempt_timestamp": last_ts,
+                "last_cured_timestamp": cured_ts,
+                "arabic_text": verse_texts.get((s_num, a_num), "")
+            })
+
+        total_v = len(range_verses)
+        attempted_v = total_v - unattempted_count
+        mastery_pct = int(round(((mastered_count + cured_count) / total_v) * 100)) if total_v > 0 else 0
+
+        return {
+            "start_page": sp,
+            "end_page": ep,
+            "stats": {
+                "total_verses": total_v,
+                "attempted_verses": attempted_v,
+                "mastered_count": mastered_count,
+                "cured_count": cured_count,
+                "active_mistake_count": active_mistake_count,
+                "unattempted_count": unattempted_count,
+                "mastery_percentage": mastery_pct
+            },
+            "verses": verses_list,
+            "mistake_pages": sorted(list(mistake_pages)),
+            "cured_pages": sorted(list(cured_pages)),
+            "mistakes": [v for v in verses_list if v["status"] == "active_mistake"]
+        }
+    except Exception as e:
+        print(f"Range retention map error: {e}")
+        return {"error": str(e), "verses": [], "mistakes": []}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

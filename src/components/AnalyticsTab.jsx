@@ -4,7 +4,7 @@ import {
   CheckCircle2, Clock, Layers, Sparkles, BarChart2, ZoomIn, ZoomOut, 
   ExternalLink, Sparkle, Eye, ChevronLeft, ChevronRight, X, ShieldCheck, HelpCircle 
 } from 'lucide-react';
-import { getJuzPageRange } from '../utils/juzMapping';
+import { getJuzPageRange, FULL_SURAH_LIST } from '../utils/juzMapping';
 import { useApp } from '../context/AppContext';
 
 export const AnalyticsTab = () => {
@@ -217,17 +217,49 @@ export const AnalyticsTab = () => {
     }
   };
 
-  // Inspect Past Session Range
-  const handleInspectSession = (sess) => {
-    const startVal = Number(sess.start_val || 1);
-    const endVal = Number(sess.end_val || startVal);
-    let startPage = startVal;
-    let endPage = endVal;
-
+  // Format human-readable range description
+  const formatSessionRange = (sess) => {
+    if (sess.range_mode === 'surah') {
+      const startS = FULL_SURAH_LIST.find((s) => s.id === Number(sess.start_val));
+      const endS = FULL_SURAH_LIST.find((s) => s.id === Number(sess.end_val)) || startS;
+      if (startS) {
+        if (startS.id === endS?.id) {
+          return `Surah ${startS.name} (${startS.id}) • P. ${startS.startPage}`;
+        }
+        return `Surah ${startS.name} → ${endS?.name} • P. ${startS.startPage}–${endS?.endPage}`;
+      }
+      return `Surah ${sess.start_val} → ${sess.end_val}`;
+    }
     if (sess.range_mode === 'juz') {
-      const range = getJuzPageRange(startVal);
+      const range = getJuzPageRange(sess.start_val);
+      return `Juz ${sess.start_val} • P. ${range.startPage}–${range.endPage}`;
+    }
+    return `Page ${sess.start_val} → ${sess.end_val}`;
+  };
+
+  // Inspect Past Session Range (Surah, Juz, or Page)
+  const handleInspectSession = async (sess) => {
+    let startPage = 1;
+    let endPage = 1;
+    let rangeLabel = '';
+
+    if (sess.range_mode === 'surah') {
+      const startS = FULL_SURAH_LIST.find((s) => s.id === Number(sess.start_val)) || FULL_SURAH_LIST[0];
+      const endS = FULL_SURAH_LIST.find((s) => s.id === Number(sess.end_val)) || startS;
+      startPage = startS.startPage;
+      endPage = endS.endPage;
+      rangeLabel = startS.id === endS.id 
+        ? `Surah ${startS.name} (${startS.id})` 
+        : `Surah ${startS.name} → ${endS.name}`;
+    } else if (sess.range_mode === 'juz') {
+      const range = getJuzPageRange(sess.start_val);
       startPage = range.startPage;
       endPage = range.endPage;
+      rangeLabel = `Juz ${sess.start_val}`;
+    } else {
+      startPage = Number(sess.start_val || 1);
+      endPage = Number(sess.end_val || startPage);
+      rangeLabel = `Pages ${startPage}–${endPage}`;
     }
 
     const minP = Math.min(startPage, endPage);
@@ -237,14 +269,43 @@ export const AnalyticsTab = () => {
       pages.push(p);
     }
 
-    setZoomedPageList(pages);
-    setCurrentZoomedIndex(0);
-    setModalZoom(1);
-    setRetentionFilter('all');
-    setModalTarget({
-      page: minP,
-      label: `Session Range: Page ${minP} → ${maxP}`
-    });
+    try {
+      const res = await fetch(`/api/analytics/range_retention?start_page=${minP}&end_page=${maxP}`);
+      const retentionData = await res.json();
+
+      let initialPage = minP;
+      if (retentionData.mistake_pages && retentionData.mistake_pages.length > 0) {
+        initialPage = retentionData.mistake_pages[0];
+      }
+      const initialIdx = pages.indexOf(initialPage) >= 0 ? pages.indexOf(initialPage) : 0;
+
+      setZoomedPageList(pages);
+      setCurrentZoomedIndex(initialIdx);
+      setModalZoom(1);
+      setRetentionFilter(retentionData.stats?.active_mistake_count > 0 ? 'active_mistake' : 'all');
+      setModalTarget({
+        page: initialPage,
+        label: `${rangeLabel} • Page ${initialPage} (${minP}–${maxP})`,
+        juzInfo: {
+          juz: sess.range_mode === 'juz' ? sess.start_val : null,
+          score: retentionData.stats?.mastery_percentage ?? sess.score,
+          attempts: 1,
+          status: sess.score >= 80 ? 'mastered' : 'needs_revision',
+          rangeLabel: `${rangeLabel} (P. ${minP}–${maxP})`
+        },
+        retentionData: retentionData
+      });
+    } catch (err) {
+      console.error('Inspect session error:', err);
+      setZoomedPageList(pages);
+      setCurrentZoomedIndex(0);
+      setModalZoom(1);
+      setRetentionFilter('all');
+      setModalTarget({
+        page: minP,
+        label: `${rangeLabel} • Page ${minP}`
+      });
+    }
   };
 
   const handleJumpToTilawat = (pageNum) => {
@@ -510,11 +571,11 @@ export const AnalyticsTab = () => {
                     <td className="py-3 px-3">
                       <button
                         onClick={() => handleInspectSession(sess)}
-                        className="font-mono text-amber-300 font-bold hover:underline flex items-center gap-1"
-                        title="Click to view this session range on Mushaf"
+                        className="font-mono text-amber-300 font-bold hover:underline flex items-center gap-1.5"
+                        title="Click to view this session range with green and red highlights on Mushaf"
                       >
-                        <span>{sess.range_mode.toUpperCase()} {sess.start_val} → {sess.end_val}</span>
-                        <Eye className="w-3 h-3 text-amber-400/80" />
+                        <span>{formatSessionRange(sess)}</span>
+                        <Eye className="w-3.5 h-3.5 text-amber-400" />
                       </button>
                     </td>
                     <td className="py-3 px-3 font-extrabold">
@@ -824,7 +885,26 @@ export const AnalyticsTab = () => {
                         );
                       }
 
-                      // 3. Mastered / Unattempted (Pristine sacred manuscript text - clean)
+                      // 3. Mastered Verse (Emerald Green)
+                      if (vStatus === 'mastered') {
+                        return (
+                          <div
+                            key={`retention-box-${box.global_id}-${idx}`}
+                            className="absolute z-10 rounded-md bg-emerald-500/20 border-2 border-emerald-400/80 shadow-emerald-glow/30 ring-1 ring-emerald-400/40 transition-all"
+                            style={{
+                              left: `${leftPct}%`,
+                              top: `${topPct}%`,
+                              width: `${widthPct}%`,
+                              height: `${heightPct}%`
+                            }}
+                            title={`Mastered: Surah ${box.sura}, Ayah ${box.ayah} (Retained in Memory)`}
+                          >
+                            <div className="absolute -bottom-1 left-0 right-0 h-1 bg-emerald-500 rounded-full shadow-sm" />
+                          </div>
+                        );
+                      }
+
+                      // 4. Unattempted (Pristine sacred manuscript text - clean)
                       return null;
                     })}
                   </div>
