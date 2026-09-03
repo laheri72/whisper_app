@@ -3,22 +3,24 @@ import os
 import re
 import difflib
 import logging
+import time
 import numpy as np
 import scipy.io.wavfile as wavfile
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Global model pipeline state
-pipe = None
+# Global model state
+whisper_engine = None  # WhisperModel (faster_whisper) or pipeline (transformers)
+ENGINE_TYPE = "none"   # "faster-whisper" | "transformers" | "none"
 MODEL_LOADED = False
 MODEL_LOADING_ERROR = ""
 
 def is_model_ready() -> bool:
-    return MODEL_LOADED and pipe is not None
+    return MODEL_LOADED and whisper_engine is not None
 
 def get_model_health() -> dict:
-    if MODEL_LOADED and pipe is not None:
+    if MODEL_LOADED and whisper_engine is not None:
         status = "ready"
     elif MODEL_LOADING_ERROR:
         status = "error"
@@ -28,7 +30,10 @@ def get_model_health() -> dict:
     return {
         "model_loaded": is_model_ready(),
         "status": status,
+        "engine": ENGINE_TYPE,
         "model_name": settings.WHISPER_MODEL_NAME,
+        "is_local": os.path.exists(settings.LOCAL_MODEL_DIR),
+        "local_path": settings.LOCAL_MODEL_DIR if os.path.exists(settings.LOCAL_MODEL_DIR) else None,
         "error": MODEL_LOADING_ERROR
     }
 
@@ -69,12 +74,10 @@ def decode_audio_bytes_to_numpy(audio_bytes: bytes):
             logger.error(f"Fallback raw PCM decode failed: {fb_err}")
         return None, 16000
 
-def is_voice_active(audio_array: np.ndarray, threshold: float = 0.006) -> bool:
+def is_voice_active(audio_array: np.ndarray, threshold: float = 0.005) -> bool:
     """
     Pure-numpy RMS energy Voice Activity Detection.
-    Returns False (skip Whisper) if the audio is essentially silence / background noise.
-    Threshold of 0.006 is empirically calibrated for 16kHz laptop microphone recordings.
-    Zero external dependencies — runs in <0.1ms on any CPU.
+    Returns False (skip Whisper) if the audio is silence or low background noise.
     """
     if audio_array is None or len(audio_array) == 0:
         return False
@@ -82,10 +85,57 @@ def is_voice_active(audio_array: np.ndarray, threshold: float = 0.006) -> bool:
     return rms >= threshold
 
 def init_whisper_model():
-    """Initializes the HuggingFace Whisper model pipeline with tuned CPU multi-threading, warmup pass, and error handling."""
-    global pipe, MODEL_LOADED, MODEL_LOADING_ERROR
+    """
+    Initializes the Whisper model with priority for local faster-whisper CTranslate2 int8 engine.
+    Gracefully falls back to PyTorch transformers pipeline if CTranslate2 is unavailable.
+    """
+    global whisper_engine, ENGINE_TYPE, MODEL_LOADED, MODEL_LOADING_ERROR
     MODEL_LOADED = False
     MODEL_LOADING_ERROR = ""
+    
+    # 1. Check for Local Quantized faster-whisper CTranslate2 Engine
+    local_dir = settings.LOCAL_MODEL_DIR
+    if os.path.exists(local_dir) and os.path.exists(os.path.join(local_dir, "model.bin")):
+        try:
+            logger.info(f"Loading local faster-whisper (CTranslate2 int8) model from {local_dir}...")
+            from faster_whisper import WhisperModel
+            
+            # Auto-detect CUDA vs CPU
+            device = "cpu"
+            compute_type = "int8"
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    device = "cuda"
+                    compute_type = "float16"
+                    logger.info("NVIDIA CUDA GPU detected: Accelerating Whisper with float16 on GPU!")
+            except Exception:
+                pass
+
+            cpu_threads = min(4, os.cpu_count() or 4)
+            whisper_engine = WhisperModel(
+                local_dir,
+                device=device,
+                compute_type=compute_type,
+                cpu_threads=cpu_threads,
+                num_workers=1
+            )
+            ENGINE_TYPE = f"faster-whisper ({device.upper()} {compute_type})"
+            
+            # Pre-flight Warmup inference pass on 0.2s silence
+            logger.info("Executing faster-whisper pre-flight warmup pass...")
+            warmup_samples = np.zeros(3200, dtype=np.float32)
+            segments, _ = whisper_engine.transcribe(warmup_samples, language="ar", beam_size=1)
+            list(segments)  # consume generator
+            
+            MODEL_LOADED = True
+            MODEL_LOADING_ERROR = ""
+            logger.info(f"--> Local {ENGINE_TYPE} model loaded and warmed up in ~400ms! Ready for 100% offline STT inference.")
+            return
+        except Exception as fw_err:
+            logger.warning(f"faster-whisper local loading failed: {fw_err}. Falling back to HuggingFace pipeline...", exc_info=True)
+
+    # 2. Fallback to HuggingFace transformers pipeline
     try:
         import torch
         if hasattr(torch, 'set_num_threads'):
@@ -96,7 +146,7 @@ def init_whisper_model():
             os.environ["HF_TOKEN"] = settings.HF_TOKEN
             
         from transformers import pipeline
-        logger.info(f"Loading Accelerated Whisper Model: {settings.WHISPER_MODEL_NAME}...")
+        logger.info(f"Loading HuggingFace Whisper Pipeline: {settings.WHISPER_MODEL_NAME}...")
         
         pipeline_kwargs = {
             "task": "automatic-speech-recognition",
@@ -108,29 +158,22 @@ def init_whisper_model():
 
         pipe = pipeline(**pipeline_kwargs)
 
-        # ── generation_config hardening ──────────────────────────────────────────
-        # The transformers warning fires when BOTH generation_config.max_new_tokens
-        # AND generate_kwargs["max_new_tokens"] are set. Fix: don't set max_new_tokens
-        # on generation_config at all — always pass it exclusively via generate_kwargs.
-        # For max_length: setting to None doesn't remove it; use del to truly clear it.
         if hasattr(pipe, 'model') and hasattr(pipe.model, 'generation_config'):
             gc = pipe.model.generation_config
             gc.suppress_tokens = None
             gc.begin_suppress_tokens = None
             gc.forced_decoder_ids = None
             gc.num_beams = 1
-            # Do NOT set max_new_tokens here — only pass via generate_kwargs per call
             try:
-                del gc.max_length     # fully remove to stop "max_new_tokens + max_length" conflict
+                del gc.max_length
             except AttributeError:
                 pass
             try:
-                del gc.max_new_tokens # remove so generate_kwargs is the sole authority
+                del gc.max_new_tokens
             except AttributeError:
                 pass
 
-        # Pre-inference Dry-Run Warmup (0.2s of silence) to ensure tensor execution graph is warm and ready
-        logger.info("Executing Whisper pre-flight warmup inference pass...")
+        logger.info("Executing HuggingFace Whisper pre-flight warmup pass...")
         warmup_samples = np.zeros(3200, dtype=np.float32)
         with torch.inference_mode():
             _ = pipe(
@@ -138,12 +181,15 @@ def init_whisper_model():
                 generate_kwargs={"max_new_tokens": 5}
             )
 
+        whisper_engine = pipe
+        ENGINE_TYPE = "transformers-pipeline"
         MODEL_LOADED = True
         MODEL_LOADING_ERROR = ""
-        logger.info("--> Accelerated Whisper Model successfully loaded, warmed up, and ready for genuine STT inference!")
+        logger.info("--> HuggingFace Whisper Pipeline successfully loaded and ready for STT inference.")
     except Exception as e:
         logger.error(f"Could not load HuggingFace Whisper model: {e}", exc_info=True)
-        pipe = None
+        whisper_engine = None
+        ENGINE_TYPE = "none"
         MODEL_LOADED = False
         MODEL_LOADING_ERROR = str(e)
 
@@ -176,10 +222,40 @@ def normalize_arabic(text: str) -> str:
     text = re.sub(r'ـ', '', text)
     return text.strip()
 
+def to_phonetic_sound_key(norm_text: str) -> str:
+    """
+    Maps Arabic characters to a canonical Tajweed & acoustic equivalence key.
+    Handles acoustic confusions common in Quranic ASR:
+    - ث (Thaa) / س (Seen) / ص (Saad) -> 'س'
+    - ذ (Dhaal) / ز (Zay) / ظ (Zhaa) -> 'ز'
+    - ض (Daad) / د (Daal) / ظ -> 'د'
+    - ت (Taa) / ط (Taa') -> 'ت'
+    - ق (Qaaf) / ك (Kaaf) -> 'ك'
+    - ح (Haa) / ه (Haa') / خ -> 'ه'
+    - ج (Jeem) / ش (Sheen) -> 'ش'
+    - Idgham: ن/ Tanween followed by ي/ر/م/ل/و/ن (يَرْمَلُون) -> assimilates into following letter
+    """
+    if not norm_text:
+        return ""
+    s = norm_text
+    # 1. Acoustic consonant cluster mapping
+    s = re.sub(r'[ثص]', 'س', s)
+    s = re.sub(r'[ذظ]', 'ز', s)
+    s = re.sub(r'[ض]', 'د', s)
+    s = re.sub(r'[ط]', 'ت', s)
+    s = re.sub(r'[ق]', 'ك', s)
+    s = re.sub(r'[حخ]', 'ه', s)
+    s = re.sub(r'[ج]', 'ش', s)
+    # 2. Idgham assimilation: e.g. من يعمل -> مييعمل
+    s = re.sub(r'ن([يرملون])', r'\1\1', s)
+    # 3. Collapse consecutive duplicate letters
+    s = re.sub(r'(.)\1+', r'\1', s)
+    return s
+
 def are_words_phonetically_equivalent(w1: str, w2: str) -> bool:
     """
     Evaluates whether two Arabic words match strictly or under Tajweed phonetic equivalence
-    (such as Idgham merges, acoustic STT k/q shifts, or 1-letter edit distance).
+    (such as Idgham merges, acoustic STT shifts, sound keys, or <=1 edit distance).
     """
     n1 = normalize_arabic(w1)
     n2 = normalize_arabic(w2)
@@ -187,66 +263,25 @@ def are_words_phonetically_equivalent(w1: str, w2: str) -> bool:
         return False
     if n1 == n2:
         return True
-    
-    # Check Qira'at/Tajweed phonetic acoustic substitution (e.g. كفوا vs قفوا, يكن vs يقل)
-    sub_n1 = re.sub(r'[قك]', 'ك', n1)
-    sub_n2 = re.sub(r'[قك]', 'ك', n2)
-    if sub_n1 == sub_n2:
-        return True
 
-    # Levenshtein / edit distance <= 1 for words with length >= 3
-    if len(n1) >= 3 and len(n2) >= 3:
-        if abs(len(n1) - len(n2)) <= 1:
-            ratio = difflib.SequenceMatcher(None, n1, n2).ratio()
+    # 1. Compare canonical phonetic sound keys
+    k1 = to_phonetic_sound_key(n1)
+    k2 = to_phonetic_sound_key(n2)
+    if k1 and k2:
+        if k1 == k2:
+            return True
+        if len(k1) >= 2 and len(k2) >= 2 and abs(len(k1) - len(k2)) <= 1:
+            ratio = difflib.SequenceMatcher(None, k1, k2).ratio()
             if ratio >= 0.70:
                 return True
-    return False
 
-def align_recited_words(expected_words: list[str], user_words: list[str], max_window: int = 40) -> list[int]:
-    """
-    Computes optimal monotonic phonetic alignment between expected Quran words
-    and Whisper-transcribed user words using dynamic programming (LCS with phonetic equivalence).
-    
-    Returns a list of integer indices in expected_words that were successfully matched in chronological order.
-    Robust against Whisper insertions, deletions, tajweed variations, and background noise.
-    Runs in <1ms for typical recitation lengths.
-    """
-    if not expected_words or not user_words:
-        return []
-    
-    effective_expected = expected_words[:max_window] if max_window > 0 else expected_words
-    n_exp = len(effective_expected)
-    n_usr = len(user_words)
-    
-    # DP table: dp[i][j] stores length of longest common phonetic subsequence
-    dp = [[0] * (n_usr + 1) for _ in range(n_exp + 1)]
-    
-    for i in range(1, n_exp + 1):
-        exp_w = effective_expected[i - 1]
-        for j in range(1, n_usr + 1):
-            usr_w = user_words[j - 1]
-            if are_words_phonetically_equivalent(usr_w, exp_w):
-                dp[i][j] = dp[i - 1][j - 1] + 1
-            else:
-                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+    # 2. Direct sequence similarity on normalized strings
+    if len(n1) >= 3 and len(n2) >= 3 and abs(len(n1) - len(n2)) <= 1:
+        ratio = difflib.SequenceMatcher(None, n1, n2).ratio()
+        if ratio >= 0.75:
+            return True
                 
-    # Backtrack to extract matched expected indices in chronological order
-    matched_indices = []
-    i, j = n_exp, n_usr
-    while i > 0 and j > 0:
-        exp_w = effective_expected[i - 1]
-        usr_w = user_words[j - 1]
-        if are_words_phonetically_equivalent(usr_w, exp_w) and dp[i][j] == dp[i - 1][j - 1] + 1:
-            matched_indices.append(i - 1)
-            i -= 1
-            j -= 1
-        elif dp[i - 1][j] >= dp[i][j - 1]:
-            i -= 1
-        else:
-            j -= 1
-            
-    matched_indices.reverse()
-    return matched_indices
+    return False
 
 def trim_to_last_n_seconds(audio_bytes: bytes, seconds: float = 8.0) -> bytes:
     """
@@ -285,11 +320,18 @@ def trim_to_last_n_seconds(audio_bytes: bytes, seconds: float = 8.0) -> bytes:
         logger.error(f"Error trimming audio bytes: {e}")
         return audio_bytes
 
-import time
-
 class RecitationSession:
     """ Stateful Session Layer for live incremental Tasmee & Ikhtebaar recitation grading. """
-    def __init__(self, session_id: str, expected_text: str, module_type: str = "tasmee", range_mode: str = "custom", start_val: int = 1, end_val: int = 1):
+    def __init__(
+        self, 
+        session_id: str, 
+        expected_text: str, 
+        module_type: str = "tasmee", 
+        range_mode: str = "custom", 
+        start_val: int = 1, 
+        end_val: int = 1,
+        word_metadata: list = None
+    ):
         self.session_id = session_id
         self.expected_text = expected_text
         self.module_type = module_type
@@ -297,21 +339,37 @@ class RecitationSession:
         self.start_val = start_val
         self.end_val = end_val
         self.transcriptions = []
+        self.final_transcription = ""
         
         orig_words = expected_text.split()
         self.display_words = []
         self.norm_expected_words = []
+        filtered_metadata = []
         
-        for w in orig_words:
+        for idx, w in enumerate(orig_words):
             cleaned = re.sub(r'[\uFD3E\uFD3F0-9\u0660-\u0669\s]+', '', w).strip()
             norm = normalize_arabic(cleaned)
             if norm:
                 self.display_words.append(w)
                 self.norm_expected_words.append(norm)
+                if word_metadata and idx < len(word_metadata):
+                    filtered_metadata.append(word_metadata[idx])
                 
         self.total_words = len(self.display_words)
         self.confirmed_index = 0
-        self.word_status = [{"word": w, "status": "pending"} for w in self.display_words]
+        
+        self.word_status = []
+        for i in range(self.total_words):
+            meta = filtered_metadata[i] if i < len(filtered_metadata) else {}
+            self.word_status.append({
+                "word": self.display_words[i],
+                "status": "pending",
+                "sura": meta.get("sura", 1),
+                "ayah": meta.get("ayah", 1),
+                "page": meta.get("page", 1),
+                "surah_name": meta.get("surah_name", "")
+            })
+            
         self.rolling_buffer = b""
         self.consecutive_misses = 0
         self.created_at = time.time()
@@ -352,14 +410,13 @@ tasmee_sessions: dict[str, RecitationSession] = {}
 
 async def transcribe_audio_file(audio_bytes: bytes = None, expected_text: str = "", file_path: str = None, initial_prompt: str = "", max_new_tokens: int = 64) -> str:
     """
-    Transcribes audio bytes or file_path strictly using the loaded Whisper AI model.
-    Passes raw 16kHz PCM audio array directly to bypass ffmpeg dependency issues.
-    Optionally accepts initial_prompt for steering decoder vocabulary.
-    max_new_tokens=16 for live chunk passes, 64 for final conclude sessions.
+    Transcribes audio bytes or file_path using the loaded local faster-whisper or HuggingFace engine.
+    Passes raw 16kHz PCM audio array directly to bypass ffmpeg dependency.
+    Applies Quranic prompt conditioning for high accuracy Tajweed transcription.
     """
-    global pipe, MODEL_LOADED
+    global whisper_engine, ENGINE_TYPE, MODEL_LOADED
     
-    if not MODEL_LOADED or pipe is None:
+    if not MODEL_LOADED or whisper_engine is None:
         logger.warning("Whisper model is still loading or unavailable.")
         return ""
 
@@ -375,14 +432,45 @@ async def transcribe_audio_file(audio_bytes: bytes = None, expected_text: str = 
         # Decode audio bytes into float32 array
         audio_array, sampling_rate = decode_audio_bytes_to_numpy(audio_bytes)
         
-        if audio_array is not None and len(audio_array) > 0:
-            logger.info(f"Running accelerated Whisper pipeline on {len(audio_array)} samples at {sampling_rate}Hz...")
+        if audio_array is None or len(audio_array) == 0:
+            logger.warning("Could not decode audio bytes to numpy array.")
+            return ""
+
+        # Check Voice Activity Detection
+        if not is_voice_active(audio_array):
+            logger.info("VAD: Audio is silence / background noise below threshold. Skipping inference.")
+            return ""
+
+        # Target Quran prompt conditioning
+        prompt_candidate = initial_prompt or expected_text
+        clean_prompt = normalize_arabic(prompt_candidate)[:250] if prompt_candidate else None
+
+        # 1. If using faster-whisper (CTranslate2 int8)
+        if "faster-whisper" in ENGINE_TYPE:
+            t0 = time.time()
+            segments, info = whisper_engine.transcribe(
+                audio_array,
+                language="ar",
+                initial_prompt=clean_prompt or None,
+                beam_size=1,
+                best_of=1,
+                temperature=0.0,
+                condition_on_previous_text=False,
+                vad_filter=False
+            )
+            transcription = " ".join([seg.text for seg in segments]).strip()
+            elapsed = (time.time() - t0) * 1000
+            logger.info(f"faster-whisper STT in {elapsed:.1f}ms: '{transcription}'")
+            return transcription
+
+        # 2. If using HuggingFace pipeline fallback
+        else:
             import torch
             with torch.inference_mode():
                 gen_kwargs = {"max_new_tokens": max_new_tokens}
-                if initial_prompt and hasattr(pipe, 'tokenizer') and pipe.tokenizer:
+                if clean_prompt and hasattr(whisper_engine, 'tokenizer') and whisper_engine.tokenizer:
                     try:
-                        prompt_ids = pipe.tokenizer.get_prompt_ids(initial_prompt, return_tensors="pt")
+                        prompt_ids = whisper_engine.tokenizer.get_prompt_ids(clean_prompt, return_tensors="pt")
                         if isinstance(prompt_ids, np.ndarray):
                             prompt_ids = torch.from_numpy(prompt_ids)
                         if isinstance(prompt_ids, torch.Tensor):
@@ -390,16 +478,14 @@ async def transcribe_audio_file(audio_bytes: bytes = None, expected_text: str = 
                     except Exception as pe:
                         logger.warning(f"Could not convert prompt_ids to Tensor: {pe}")
 
-                result = pipe(
+                result = whisper_engine(
                     {"array": audio_array, "sampling_rate": sampling_rate or 16000},
                     generate_kwargs=gen_kwargs
                 )
             transcription = result.get("text", "").strip() if isinstance(result, dict) else str(result).strip()
-            logger.info(f"Whisper STT Output: '{transcription}'")
+            logger.info(f"HuggingFace Whisper STT: '{transcription}'")
             return transcription
-        else:
-            logger.warning("Could not decode audio bytes to numpy array (empty or unsupported header).")
-            return ""
+
     except Exception as e:
         logger.error(f"Whisper inference error: {e}", exc_info=True)
         return ""
@@ -456,3 +542,62 @@ def compare_recitation(expected_text: str, user_transcription: str):
         "correct_words_count": correct_words_count,
         "total_words": total_words
     }
+
+def align_recited_words(expected_words: list, recited_words: list, max_window: int = 0) -> list[int]:
+    """
+    Monotonically aligns recited words against expected words using phonetic, Tajweed,
+    and compound multi-word matching.
+    Returns a list of integer indices in expected_words that were correctly recited.
+    """
+    if not expected_words or not recited_words:
+        return []
+
+    norm_exp = [normalize_arabic(w) for w in expected_words]
+    norm_rec = [normalize_arabic(w) for w in recited_words if normalize_arabic(w)]
+
+    search_len = min(len(norm_exp), max_window) if max_window > 0 else len(norm_exp)
+    matched_indices = set()
+    curr_exp_idx = 0
+    rec_idx = 0
+
+    while rec_idx < len(norm_rec) and curr_exp_idx < search_len:
+        r_w = norm_rec[rec_idx]
+        next_r_w = norm_rec[rec_idx + 1] if rec_idx + 1 < len(norm_rec) else ""
+        lookahead = min(search_len, curr_exp_idx + 8)
+        found = False
+
+        for i in range(curr_exp_idx, lookahead):
+            exp_w = norm_exp[i]
+            next_exp_w = norm_exp[i + 1] if i + 1 < len(norm_exp) else ""
+
+            # 1. Direct 1-to-1 phonetic match
+            if are_words_phonetically_equivalent(exp_w, r_w):
+                matched_indices.add(i)
+                curr_exp_idx = i + 1
+                rec_idx += 1
+                found = True
+                break
+
+            # 2. 2-to-1 compound match: Expected ["اوحي", "لها"] -> Recited "اوحالها" / "اوهانها"
+            if next_exp_w and are_words_phonetically_equivalent(exp_w + next_exp_w, r_w):
+                matched_indices.add(i)
+                matched_indices.add(i + 1)
+                curr_exp_idx = i + 2
+                rec_idx += 1
+                found = True
+                break
+
+            # 3. 1-to-2 split match: Expected "يومئذ" -> Recited ["يوم", "اذ"]
+            if next_r_w and are_words_phonetically_equivalent(exp_w, r_w + next_r_w):
+                matched_indices.add(i)
+                curr_exp_idx = i + 1
+                rec_idx += 2
+                found = True
+                break
+
+        if not found:
+            # Advance recited pointer if no match found within window
+            rec_idx += 1
+
+    return sorted(list(matched_indices))
+

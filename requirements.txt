@@ -46,3 +46,5 @@ typing_extensions==4.16.0
 scipy==1.18.0
 soundfile==0.14.0
 uvicorn==0.52.1
+faster-whisper>=1.0.0
+ctranslate2>=4.0.0

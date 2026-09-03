@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { 
   Award, HelpCircle, ChevronDown, ChevronUp, Mic, MicOff, RefreshCw, 
   CheckCircle2, AlertCircle, Sparkles, BookOpen, Pause, Play, Download, 
-  X, Trash2, Volume2, ZoomIn, ZoomOut, ExternalLink, Eye, ChevronLeft, ChevronRight 
+  X, Trash2, Volume2, ZoomIn, ZoomOut, ExternalLink, Eye, ChevronLeft, ChevronRight,
+  Copy, Check
 } from 'lucide-react';
 import { getJuzPageRange, JUZ_LIST, SURAH_LIST, FULL_SURAH_LIST } from '../utils/juzMapping';
 import { WaveMediaRecorder } from '../utils/audioRecorder';
@@ -65,6 +66,19 @@ export const IkhtebaarTab = () => {
   const [gradingError, setGradingError] = useState('');
   const [nudgeActive, setNudgeActive] = useState(false);
   const [nudgeText, setNudgeText] = useState('');
+  const [assessmentFilter, setAssessmentFilter] = useState('all'); // 'all' | 'mistakes' | 'matches'
+  const [copiedTranscription, setCopiedTranscription] = useState(false);
+  const [modalSpecificAyah, setModalSpecificAyah] = useState(null);
+  const [showTranscriptionModal, setShowTranscriptionModal] = useState(false);
+
+  // Embedded Manuscript Assessment Canvas State
+  const [assessmentViewMode, setAssessmentViewMode] = useState('manuscript'); // 'manuscript' | 'chips'
+  const [activeResultPageIndex, setActiveResultPageIndex] = useState(0);
+  const [resultPageBoxes, setResultPageBoxes] = useState([]);
+  const [loadingResultBoxes, setLoadingResultBoxes] = useState(false);
+  const [resultDimensions, setResultDimensions] = useState({ width: 1000, height: 1000 });
+  const [resultZoom, setResultZoom] = useState(1);
+  const [selectedAyahDetails, setSelectedAyahDetails] = useState(null);
 
   // Multi-Page Manuscript Lightbox Modal State with Dual-Anchor Highlights
   const [isZoomed, setIsZoomed] = useState(false);
@@ -82,6 +96,50 @@ export const IkhtebaarTab = () => {
   const assessmentCardRef = useRef(null);
   const chunkIndexRef = useRef(0);
   const sessionIdRef = useRef('');
+
+  // Extract unique pages from gradeResult
+  const resultPages = React.useMemo(() => {
+    if (!gradeResult?.comparison || gradeResult.comparison.length === 0) return [];
+    const pgs = Array.from(new Set(
+      gradeResult.comparison
+        .map((item) => Number(item.page))
+        .filter((p) => !isNaN(p) && p > 0)
+    )).sort((a, b) => a - b);
+    return pgs.length > 0 ? pgs : [Number(currentQuestion?.page_number) || 1];
+  }, [gradeResult, currentQuestion]);
+
+  const activeResultPage = resultPages[activeResultPageIndex] || resultPages[0] || 1;
+
+  // Fetch Bounding Boxes for the currently viewed result page in Embedded Visualizer
+  useEffect(() => {
+    if (!gradeResult || !activeResultPage) return;
+    let isMounted = true;
+    setLoadingResultBoxes(true);
+    fetch(`/api/page_boxes/${activeResultPage}`)
+      .then((res) => (res.ok ? res.json() : { boxes: [] }))
+      .then((data) => {
+        if (isMounted) setResultPageBoxes(data.boxes || []);
+      })
+      .catch((err) => {
+        console.error('Error fetching result page boxes:', err);
+        if (isMounted) setResultPageBoxes([]);
+      })
+      .finally(() => {
+        if (isMounted) setLoadingResultBoxes(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [gradeResult, activeResultPage]);
+
+  // Reset active page index and selection when a new evaluation arrives
+  useEffect(() => {
+    if (gradeResult) {
+      setActiveResultPageIndex(0);
+      setSelectedAyahDetails(null);
+    }
+  }, [gradeResult]);
 
   // Auto-scroll the real-time transcription container
   useEffect(() => {
@@ -175,7 +233,7 @@ export const IkhtebaarTab = () => {
   }, [isZoomed, currentZoomedIndex, zoomedPageList]);
 
   // Open full manuscript viewer spanning from Start Verse page to Stop Verse page
-  const handleViewFullPage = (targetPage = null) => {
+  const handleViewFullPage = (targetPage = null, specificAyah = null) => {
     if (!currentQuestion) return;
     const startPage = Number(currentQuestion?.page_number || 1);
     const endPage = Number(currentQuestion?.end_page_number || startPage);
@@ -187,11 +245,19 @@ export const IkhtebaarTab = () => {
       pageRangeList.push(p);
     }
 
-    setZoomedPageList(pageRangeList);
-    const target = targetPage !== null ? Number(targetPage) : startPage;
-    const idx = pageRangeList.indexOf(target);
+    const target = targetPage !== null && !isNaN(Number(targetPage)) && Number(targetPage) > 0 
+      ? Number(targetPage) 
+      : startPage;
+      
+    if (!pageRangeList.includes(target)) {
+      pageRangeList.push(target);
+    }
+    const sortedPages = Array.from(new Set(pageRangeList)).sort((a, b) => a - b);
+    setZoomedPageList(sortedPages);
+    const idx = sortedPages.indexOf(target);
     setCurrentZoomedIndex(idx >= 0 ? idx : 0);
     setModalZoom(1);
+    setModalSpecificAyah(specificAyah);
     setIsZoomed(true);
   };
 
@@ -701,12 +767,13 @@ export const IkhtebaarTab = () => {
         </div>
       </div>
 
-      {/* 2. Top Prominent Assessment Score Card */}
+      {/* 2. Next-Gen Embedded Manuscript Assessment Card */}
       {gradeResult && (
         <div 
           ref={assessmentCardRef}
           className="glass-panel-gold rounded-2xl p-6 border border-gold-500/50 shadow-2xl space-y-6 animate-slideDown ring-1 ring-gold-500/20"
         >
+          {/* Top Score & Action Banner */}
           <div className="flex flex-wrap items-center justify-between gap-6 border-b border-slate-800 pb-5">
             <div className="flex items-center gap-4">
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-slate-950 font-extrabold text-2xl flex items-center justify-center shadow-gold-glow">
@@ -722,7 +789,7 @@ export const IkhtebaarTab = () => {
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 mt-1">
-                  Verified against Madani text standard.
+                  Evaluated against printed Madani Mushaf standard.
                 </p>
               </div>
             </div>
@@ -741,14 +808,27 @@ export const IkhtebaarTab = () => {
                 <span className="text-sm font-bold text-red-300">{mistakeCount}</span>
               </div>
 
-              {/* View on Mushaf CTA */}
+              {/* View Spoken STT Popup CTA */}
+              {gradeResult.user_transcription && (
+                <button
+                  type="button"
+                  onClick={() => setShowTranscriptionModal(true)}
+                  className="px-3.5 py-2.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-gold-400 hover:text-gold-300 border border-gold-500/30 font-bold text-xs flex items-center gap-1.5 shadow transition-all"
+                  title="View raw Speech-to-Text audio transcript in a popup modal"
+                >
+                  <Volume2 className="w-3.5 h-3.5 text-gold-400" />
+                  <span>View Spoken STT Log</span>
+                </button>
+              )}
+
+              {/* Lightbox Modal CTA */}
               <button
-                onClick={() => handleViewFullPage()}
-                className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs flex items-center gap-1.5 shadow-md transition-all ml-1"
-                title="View exam recitation on the Madani Mushaf"
+                onClick={() => handleViewFullPage(activeResultPage)}
+                className="px-3.5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs flex items-center gap-1.5 shadow-md transition-all"
+                title="Open high-resolution Lightbox Manuscript viewer"
               >
                 <BookOpen className="w-3.5 h-3.5" />
-                <span>View on Mushaf</span>
+                <span>Lightbox View</span>
               </button>
 
               <button
@@ -761,41 +841,444 @@ export const IkhtebaarTab = () => {
             </div>
           </div>
 
-          {gradeResult.user_transcription && (
-            <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Transcribed Output:</span>
-              <p dir="rtl" className="font-arabic text-lg text-amber-200 text-right">{gradeResult.user_transcription}</p>
+          {/* View Mode Switcher Header */}
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800/80 pb-3">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                <BookOpen className="w-4 h-4 text-gold-400" />
+                <span>Interactive Assessment Canvas</span>
+              </span>
+              <span className="text-gold-400 font-arabic text-sm">مصحف التقييم المباشر</span>
+            </div>
+
+            <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => setAssessmentViewMode('manuscript')}
+                className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all ${
+                  assessmentViewMode === 'manuscript'
+                    ? 'bg-amber-500 text-slate-950 font-bold shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Mushaf Visualizer</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setAssessmentViewMode('chips')}
+                className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all ${
+                  assessmentViewMode === 'chips'
+                    ? 'bg-amber-500 text-slate-950 font-bold shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>Word Matrix</span>
+              </button>
+            </div>
+          </div>
+
+          {/* VIEW 1: Embedded Interactive Mushaf Visualizer (Primary Canvas) */}
+          {assessmentViewMode === 'manuscript' && (
+            <div className="space-y-4">
+              {/* Multi-Page Navigation Bar (For portions spanning multiple pages) */}
+              <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-xl bg-slate-950/80 border border-slate-800">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      if (activeResultPageIndex > 0) {
+                        setActiveResultPageIndex((prev) => prev - 1);
+                        setSelectedAyahDetails(null);
+                      }
+                    }}
+                    disabled={activeResultPageIndex <= 0}
+                    className="p-2 rounded-lg bg-slate-900 text-slate-300 disabled:opacity-30 hover:bg-slate-800 transition-all"
+                    title="Previous Page (RTL Next)"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+
+                  <div className="flex items-center gap-1.5 overflow-x-auto py-1 max-w-[400px]">
+                    {resultPages.map((pg, idx) => {
+                      const mCount = gradeResult.comparison?.filter(
+                        (w) => Number(w.page) === Number(pg) && w.status === 'mistake'
+                      ).length || 0;
+                      const isActive = idx === activeResultPageIndex;
+
+                      return (
+                        <button
+                          key={pg}
+                          onClick={() => {
+                            setActiveResultPageIndex(idx);
+                            setSelectedAyahDetails(null);
+                          }}
+                          className={`px-3 py-1 rounded-xl border text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 ${
+                            isActive
+                              ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md font-extrabold'
+                              : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:border-slate-700'
+                          }`}
+                        >
+                          <span>Page {pg}</span>
+                          {mCount > 0 ? (
+                            <span className="px-1.5 py-0.2 rounded-full bg-red-500 text-white text-[10px] font-bold">
+                              {mCount} ✖
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.2 rounded-full bg-emerald-500 text-slate-950 text-[10px] font-bold">
+                              ✔
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      if (activeResultPageIndex < resultPages.length - 1) {
+                        setActiveResultPageIndex((prev) => prev + 1);
+                        setSelectedAyahDetails(null);
+                      }
+                    }}
+                    disabled={activeResultPageIndex >= resultPages.length - 1}
+                    className="p-2 rounded-lg bg-slate-900 text-slate-300 disabled:opacity-30 hover:bg-slate-800 transition-all"
+                    title="Next Page (RTL Prev)"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-1 text-[11px] font-mono">
+                    <span className="flex items-center gap-1 text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-500/30">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400" /> Correct
+                    </span>
+                    <span className="flex items-center gap-1 text-red-400 bg-red-950/60 px-2 py-0.5 rounded border border-red-500/30">
+                      <span className="w-2 h-2 rounded-full bg-red-400 animate-pulse" /> Mistake
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setResultZoom((z) => Math.max(0.8, Number((z - 0.1).toFixed(1))))}
+                      className="p-1.5 rounded-lg bg-slate-900 text-slate-400 hover:text-white"
+                      title="Zoom Out"
+                    >
+                      <ZoomOut className="w-3.5 h-3.5" />
+                    </button>
+                    <span className="text-xs font-mono font-bold text-slate-400 w-10 text-center">
+                      {Math.round(resultZoom * 100)}%
+                    </span>
+                    <button
+                      onClick={() => setResultZoom((z) => Math.min(1.5, Number((z + 0.1).toFixed(1))))}
+                      className="p-1.5 rounded-lg bg-slate-900 text-slate-400 hover:text-white"
+                      title="Zoom In"
+                    >
+                      <ZoomIn className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Primary Mushaf Canvas with Dynamic Coordinate Overlays */}
+              <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800/90 overflow-x-auto flex flex-col items-center justify-center min-h-[480px]">
+                {loadingResultBoxes ? (
+                  <div className="flex flex-col items-center justify-center gap-3 text-amber-400 py-24">
+                    <RefreshCw className="w-8 h-8 animate-spin" />
+                    <span className="text-xs font-mono font-bold uppercase tracking-wider">
+                      Loading Page {activeResultPage} Manuscript Overlay...
+                    </span>
+                  </div>
+                ) : (
+                  <div 
+                    className="relative inline-block mx-auto rounded-xl overflow-hidden shadow-2xl border border-gold-500/30 select-none max-w-full"
+                    style={{
+                      transform: `scale(${resultZoom})`,
+                      transformOrigin: 'center top',
+                      transition: 'transform 0.15s ease-out'
+                    }}
+                  >
+                    <img
+                      src={`/api/page_image/${activeResultPage}`}
+                      alt={`Madani Manuscript Page ${activeResultPage}`}
+                      onLoad={(e) => {
+                        const { naturalWidth, naturalHeight } = e.target;
+                        if (naturalWidth && naturalHeight) {
+                          setResultDimensions({ width: naturalWidth, height: naturalHeight });
+                        }
+                      }}
+                      className="block max-h-[70vh] w-auto object-contain mx-auto pointer-events-none select-none"
+                    />
+
+                    {/* Dynamic Ayah-Level Overlays mapped onto the printed page */}
+                    {resultPageBoxes.map((box, idx) => {
+                      const wordsInAyah = (gradeResult.comparison || []).filter(
+                        (item) => Number(item.sura) === Number(box.sura) && Number(item.ayah) === Number(box.ayah)
+                      );
+
+                      if (wordsInAyah.length === 0) return null;
+
+                      const hasMistake = wordsInAyah.some((w) => w.status === 'mistake');
+                      const isAllMatch = !hasMistake && wordsInAyah.every(
+                        (w) => w.status === 'match' || w.status === 'correct' || w.status === 'bismillah_skipped'
+                      );
+                      const isSelected = selectedAyahDetails && 
+                        Number(selectedAyahDetails.sura) === Number(box.sura) && 
+                        Number(selectedAyahDetails.ayah) === Number(box.ayah);
+
+                      const leftPct = (box.min_x / resultDimensions.width) * 100;
+                      const topPct = (box.min_y / resultDimensions.height) * 100;
+                      const widthPct = ((box.max_x - box.min_x) / resultDimensions.width) * 100;
+                      const heightPct = ((box.max_y - box.min_y) / resultDimensions.height) * 100;
+
+                      let overlayClasses = 'bg-amber-500/10 border border-amber-500/30';
+                      if (isSelected) {
+                        overlayClasses = 'bg-amber-500/40 border-2 border-amber-300 ring-4 ring-amber-400 shadow-gold-glow z-30';
+                      } else if (hasMistake) {
+                        overlayClasses = 'bg-red-500/30 border-2 border-red-500 shadow-red-glow ring-2 ring-red-400/60 animate-pulse z-20 hover:bg-red-500/45';
+                      } else if (isAllMatch) {
+                        overlayClasses = 'bg-emerald-500/20 border border-emerald-400/80 shadow-emerald-glow/30 z-10 hover:bg-emerald-500/35';
+                      }
+
+                      return (
+                        <button
+                          key={`res-box-${box.global_id}-${idx}`}
+                          type="button"
+                          onClick={() => {
+                            setSelectedAyahDetails({
+                              sura: box.sura,
+                              ayah: box.ayah,
+                              global_id: box.global_id,
+                              surah_name: wordsInAyah[0]?.surah_name || `Surah ${box.sura}`,
+                              words: wordsInAyah,
+                              hasMistake,
+                              isAllMatch
+                            });
+                          }}
+                          className={`absolute rounded-md cursor-pointer transition-all ${overlayClasses}`}
+                          style={{
+                            left: `${leftPct}%`,
+                            top: `${topPct}%`,
+                            width: `${widthPct}%`,
+                            height: `${heightPct}%`
+                          }}
+                          title={`Surah ${box.sura}, Ayah ${box.ayah} — ${hasMistake ? 'Mistake detected' : 'Correct'} (Click to inspect words)`}
+                        />
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* In-Place Ayah Inspection Drawer */}
+              {selectedAyahDetails ? (
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-900/95 to-slate-950/95 border border-gold-500/40 shadow-xl space-y-3 animate-fadeIn">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-2.5">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse" />
+                      <h4 className="font-bold text-slate-100 text-sm">
+                        Inspecting: Surah {selectedAyahDetails.surah_name}, Ayah {selectedAyahDetails.ayah}
+                      </h4>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        selectedAyahDetails.hasMistake
+                          ? 'bg-red-500/20 text-red-300 border border-red-500/40'
+                          : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                      }`}>
+                        {selectedAyahDetails.hasMistake ? 'Contains Mistakes' : 'Recited Perfectly'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {selectedAyahDetails.global_id && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const audio = new Audio(`/api/audio/${selectedAyahDetails.global_id}`);
+                            audio.play().catch(console.error);
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-gold-300 border border-amber-500/40 font-bold text-xs flex items-center gap-1.5 transition-all shadow-sm"
+                          title="Listen to official recitation of this Ayah"
+                        >
+                          <Play className="w-3.5 h-3.5 fill-current" />
+                          <span>Listen to Verse</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedAyahDetails(null)}
+                        className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+                        title="Close Ayah Inspector"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Word-by-word flow for just this selected Ayah */}
+                  <div dir="rtl" className="flex flex-wrap items-center justify-start gap-2 pt-1 font-arabic text-2xl leading-loose">
+                    {selectedAyahDetails.words.map((w, wIdx) => {
+                      const isMatch = w.status === 'match' || w.status === 'correct' || w.status === 'bismillah_skipped';
+                      return (
+                        <span
+                          key={wIdx}
+                          className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border text-xl font-bold transition-all shadow-sm ${
+                            isMatch
+                              ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-300'
+                              : 'bg-red-950/90 border-red-500/60 text-red-300 ring-2 ring-red-500/40 animate-pulse'
+                          }`}
+                          title={isMatch ? 'Recited correctly' : 'Recitation mistake'}
+                        >
+                          <span>{w.word}</span>
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 text-center text-xs text-slate-400">
+                  <span>👉 Click on any highlighted Ayah on the Mushaf above to inspect its word breakdown and listen to verse audio.</span>
+                </div>
+              )}
             </div>
           )}
 
-          <div className="space-y-3">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
-              <span>Word-by-Word Assessment (Tap words to inspect on Mushaf)</span>
-              <span className="text-gold-400 font-arabic text-sm">التدقيق الحرفي</span>
-            </h4>
-
-            <div 
-              dir="rtl"
-              className="p-6 rounded-2xl bg-slate-950 border border-slate-800 flex flex-wrap justify-start gap-3 text-right leading-loose font-arabic text-2xl"
-            >
-              {gradeResult.comparison?.map((item, idx) => {
-                const isMatch = item.status === 'match' || item.status === 'correct' || item.status === 'bismillah_skipped';
-                return (
+          {/* VIEW 2: Word Matrix (Fallback Chip View) */}
+          {assessmentViewMode === 'chips' && (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                  Word-by-Word Matrix ({totalWords} Words)
+                </h4>
+                <div className="flex items-center gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800 text-[11px]">
                   <button
-                    key={idx}
                     type="button"
-                    onClick={() => handleViewFullPage()}
-                    className={`inline-flex items-center px-3 py-1.5 rounded-xl border text-xl font-bold transition-all shadow-sm cursor-pointer hover:scale-105 active:scale-95 ${
-                      isMatch
-                        ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-300 hover:border-emerald-400'
-                        : 'bg-red-950/70 border-red-500/50 text-red-300 hover:border-red-400 ring-1 ring-red-500/30 animate-pulse'
+                    onClick={() => setAssessmentFilter('all')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                      assessmentFilter === 'all' ? 'bg-amber-500 text-slate-950 shadow' : 'text-slate-400 hover:text-white'
                     }`}
-                    title={isMatch ? 'Recited correctly — click to view on Mushaf' : 'Recitation mistake — click to view on Mushaf'}
                   >
-                    {item.word}
+                    All ({totalWords})
                   </button>
-                );
-              })}
+                  <button
+                    type="button"
+                    onClick={() => setAssessmentFilter('mistakes')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                      assessmentFilter === 'mistakes' ? 'bg-red-500 text-white shadow' : 'text-red-400 hover:text-red-300'
+                    }`}
+                  >
+                    Mistakes ({mistakeCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAssessmentFilter('matches')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                      assessmentFilter === 'matches' ? 'bg-emerald-500 text-slate-950 shadow' : 'text-emerald-400 hover:text-emerald-300'
+                    }`}
+                  >
+                    Matches ({matchCount})
+                  </button>
+                </div>
+              </div>
+
+              <div 
+                dir="rtl"
+                className="p-6 rounded-2xl bg-slate-950 border border-slate-800 flex flex-wrap justify-start gap-3 text-right leading-loose font-arabic text-2xl max-h-[350px] overflow-y-auto"
+              >
+                {gradeResult.comparison?.map((item, idx) => {
+                  const isMatch = item.status === 'match' || item.status === 'correct' || item.status === 'bismillah_skipped';
+                  if (assessmentFilter === 'mistakes' && isMatch) return null;
+                  if (assessmentFilter === 'matches' && !isMatch) return null;
+
+                  return (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => handleViewFullPage(item.page, { 
+                        sura: item.sura, 
+                        ayah: item.ayah, 
+                        surah_name: item.surah_name, 
+                        word: item.word 
+                      })}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xl font-bold transition-all shadow-sm cursor-pointer hover:scale-105 active:scale-95 ${
+                        isMatch
+                          ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-300 hover:border-emerald-400 hover:bg-emerald-900/80 shadow-emerald-glow/20'
+                          : 'bg-red-950/80 border-red-500/60 text-red-300 hover:border-red-400 hover:bg-red-900/90 ring-1 ring-red-500/40 animate-pulse'
+                      }`}
+                      title={`Surah ${item.surah_name || item.sura}, Ayah ${item.ayah} (Page ${item.page}) — ${isMatch ? 'Correct' : 'Mistake'} — Click to inspect manuscript`}
+                    >
+                      <span>{item.word}</span>
+                      {item.sura && item.ayah && (
+                        <span className="text-[10px] font-mono opacity-60 px-1 py-0.5 rounded bg-black/30">
+                          {item.sura}:{item.ayah}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Floating Modal for Speech-to-Text Transcription Log */}
+      {showTranscriptionModal && gradeResult?.user_transcription && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
+          <div className="bg-slate-900 border border-gold-500/40 rounded-3xl max-w-2xl w-full p-6 shadow-2xl space-y-4 animate-scaleUp">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-amber-500/15 text-gold-400 border border-amber-500/30">
+                  <Volume2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-100 text-sm">Spoken Audio STT Log</h3>
+                  <p className="text-[11px] text-slate-400">
+                    Acoustic speech-to-text transcript generated by local Whisper AI model.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowTranscriptionModal(false)}
+                className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span className="font-mono bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800">
+                {gradeResult.user_transcription.split(/\s+/).filter(Boolean).length} Spoken Words
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(gradeResult.user_transcription);
+                  setCopiedTranscription(true);
+                  setTimeout(() => setCopiedTranscription(false), 2000);
+                }}
+                className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-gold-300 border border-amber-500/40 font-bold flex items-center gap-1.5 transition-all shadow-sm"
+              >
+                {copiedTranscription ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-emerald-400">Copied to Clipboard</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Copy Transcription</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-slate-950 border border-slate-800 max-h-[300px] overflow-y-auto">
+              <p dir="rtl" className="font-arabic text-xl text-amber-200 text-right leading-loose selection:bg-amber-500/30 selection:text-white">
+                {gradeResult.user_transcription}
+              </p>
             </div>
           </div>
         </div>
@@ -1151,15 +1634,21 @@ export const IkhtebaarTab = () => {
             {/* Real-time transcription dynamic panel */}
             <div className="p-4 rounded-xl bg-slate-950/85 border border-slate-800 space-y-2">
               <div className="flex items-center justify-between">
-                <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                  Live Recitation:
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                  <Volume2 className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Live Speech Stream Monitor</span>
                 </span>
-                <span className="text-gold-400 font-arabic text-sm" dir="rtl">متابعة التسميع</span>
+                {isRecording && (
+                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold animate-pulse">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    Live Recording
+                  </span>
+                )}
               </div>
               <div 
                 ref={correctionsContainerRef}
                 dir="rtl"
-                className="max-h-[170px] min-h-[65px] overflow-y-auto p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 text-right leading-[2.5] font-arabic text-2xl select-text shadow-inner"
+                className="max-h-[170px] min-h-[95px] overflow-y-auto p-4 rounded-xl bg-slate-950 border border-slate-800 text-right leading-loose font-arabic text-xl select-text shadow-inner"
               >
                 {(() => {
                   const verifiedWords = (transcriptionData || []).filter(
@@ -1167,49 +1656,61 @@ export const IkhtebaarTab = () => {
                   );
 
                   if (verifiedWords.length > 0) {
-                    return verifiedWords.map((item, idx) => {
-                      if (item.isRawString) {
-                        return (
-                          <span key={idx} className="inline-block mx-1 my-0.5 text-amber-200/90 font-medium">
-                            {item.text}
-                          </span>
-                        );
-                      }
-                      const isCorrect = item.status === 'match' || item.status === 'correct' || item.correct === true || item.status === 'equal';
-                      const isSkipped = item.status === 'bismillah_skipped';
-                      const isMistake = item.status === 'mistake' || item.status === 'incorrect';
-                      const wordText = item.word || item.text || (typeof item === 'string' ? item : JSON.stringify(item));
-                      
-                      let styleClass = 'text-slate-400';
-                      if (isCorrect) {
-                        styleClass = 'text-emerald-400 font-bold bg-emerald-950/50 border border-emerald-500/40 px-2 py-0.5 rounded-lg shadow-sm';
-                      } else if (isSkipped) {
-                        styleClass = 'text-slate-400 italic text-xl border-b border-slate-700/60 bg-slate-900/40 px-1.5 py-0.5 rounded';
-                      } else if (isMistake) {
-                        styleClass = 'text-red-400 line-through decoration-red-500/80 decoration-2 font-bold bg-red-950/50 border border-red-500/40 px-2 py-0.5 rounded-lg';
-                      }
+                    return (
+                      <div className="flex flex-wrap items-center justify-start gap-1.5">
+                        {verifiedWords.map((item, idx) => {
+                          if (item.isRawString) {
+                            return (
+                              <span key={idx} className="inline-block mx-1 my-0.5 text-amber-200/90 font-medium">
+                                {item.text}
+                              </span>
+                            );
+                          }
+                          const isCorrect = item.status === 'match' || item.status === 'correct' || item.correct === true || item.status === 'equal';
+                          const isSkipped = item.status === 'bismillah_skipped';
+                          const isMistake = item.status === 'mistake' || item.status === 'incorrect';
+                          const wordText = item.word || item.text || (typeof item === 'string' ? item : JSON.stringify(item));
+                          
+                          let styleClass = 'text-slate-400 bg-slate-900/60 border border-slate-700/50 px-2 py-0.5 rounded-lg';
+                          if (isCorrect) {
+                            styleClass = 'text-emerald-300 font-bold bg-emerald-950/70 border border-emerald-500/40 px-2.5 py-0.5 rounded-lg shadow-sm';
+                          } else if (isSkipped) {
+                            styleClass = 'text-teal-400/80 italic text-base border border-teal-500/30 bg-teal-950/40 px-2 py-0.5 rounded-lg';
+                          } else if (isMistake) {
+                            styleClass = 'text-red-300 font-bold bg-red-950/70 border border-red-500/50 px-2.5 py-0.5 rounded-lg';
+                          }
 
-                      return (
-                        <span
-                          key={idx}
-                          className={`inline-block mx-1 my-0.5 transition-all duration-200 ${styleClass}`}
-                          title={isSkipped ? 'Bismillah skipped' : isCorrect ? 'Recited correctly' : isMistake ? 'Mistake' : ''}
-                        >
-                          {wordText}
-                        </span>
-                      );
-                    });
+                          return (
+                            <span
+                              key={idx}
+                              className={`inline-block transition-all duration-200 ${styleClass}`}
+                              title={isSkipped ? 'Bismillah skipped' : isCorrect ? 'Recited correctly' : isMistake ? 'Mistake' : ''}
+                            >
+                              {wordText}
+                            </span>
+                          );
+                        })}
+                        {isRecording && (
+                          <span className="inline-flex items-center gap-1.5 text-xs font-sans text-amber-400 bg-amber-950/60 border border-amber-500/30 px-2.5 py-1 rounded-lg animate-pulse mr-2">
+                            <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                            <span>Listening...</span>
+                          </span>
+                        )}
+                      </div>
+                    );
                   }
 
                   return (
-                    <div className="w-full text-center text-slate-500 font-sans text-xs py-3.5 tracking-wide">
+                    <div className="w-full text-center text-slate-500 font-sans text-xs py-5 tracking-wide">
                       {isRecording ? (
-                        <span className="flex items-center justify-center gap-2 text-amber-400 animate-pulse">
-                          <span className="w-2 h-2 rounded-full bg-amber-400"></span>
-                          Listening... Recite in Arabic
+                        <span className="inline-flex items-center justify-center gap-2 text-emerald-400 font-semibold bg-emerald-950/40 border border-emerald-500/30 px-3.5 py-2 rounded-xl animate-pulse">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                          Listening live... Recite from memory (upcoming words are hidden to preserve test integrity).
                         </span>
                       ) : (
-                        'Awaiting recitation start...'
+                        <span className="text-slate-500">
+                          Awaiting recitation start... Press "Initiate Audio Recitation" to begin.
+                        </span>
                       )}
                     </div>
                   );
@@ -1251,6 +1752,13 @@ export const IkhtebaarTab = () => {
                         <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
                         Stop: {currentQuestion.end_surah_name || `Surah ${endSura}`} ({currentQuestion.end_ayah_number || endAyah}) • P. {currentQuestion.end_page_number}
                       </span>
+                      {modalSpecificAyah && (
+                        <span className="flex items-center gap-1 text-rose-400 font-bold bg-rose-950/60 border border-rose-500/40 px-2 py-0.5 rounded">
+                          <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
+                          Inspecting: Surah {modalSpecificAyah.surah_name || modalSpecificAyah.sura}, Ayah {modalSpecificAyah.ayah}
+                          {modalSpecificAyah.word && ` — "${modalSpecificAyah.word}"`}
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1350,6 +1858,11 @@ export const IkhtebaarTab = () => {
 
                   {/* Overlaid Dual-Anchor Highlight Boxes */}
                   {modalBoxes.map((box, idx) => {
+                    const isSpecificMatch =
+                      modalSpecificAyah &&
+                      Number(box.sura) === Number(modalSpecificAyah.sura) &&
+                      Number(box.ayah) === Number(modalSpecificAyah.ayah);
+
                     const isStartVerse = Number(box.sura) === startSura && Number(box.ayah) === startAyah;
                     const isEndVerse = Number(box.sura) === endSura && Number(box.ayah) === endAyah;
 
@@ -1369,6 +1882,24 @@ export const IkhtebaarTab = () => {
                     const topPct = (box.min_y / modalDimensions.height) * 100;
                     const widthPct = ((box.max_x - box.min_x) / modalDimensions.width) * 100;
                     const heightPct = ((box.max_y - box.min_y) / modalDimensions.height) * 100;
+
+                    if (isSpecificMatch) {
+                      return (
+                        <div
+                          key={`ikhtebaar-specific-${box.global_id}-${idx}`}
+                          className="absolute z-40 rounded-md bg-rose-500/35 border-2 border-rose-500 shadow-lg ring-2 ring-rose-400/50 animate-pulse transition-all"
+                          style={{
+                            left: `${leftPct}%`,
+                            top: `${topPct}%`,
+                            width: `${widthPct}%`,
+                            height: `${heightPct}%`
+                          }}
+                          title={`Inspecting: Surah ${box.sura}, Ayah ${box.ayah}`}
+                        >
+                          <div className="absolute -bottom-1 left-0 right-0 h-1 bg-rose-500 rounded-full shadow-md" />
+                        </div>
+                      );
+                    }
 
                     if (isStartVerse) {
                       return (

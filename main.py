@@ -7,6 +7,7 @@ import difflib
 import re
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 
 logger = logging.getLogger(__name__)
 from typing import Optional, List, Union
@@ -24,9 +25,7 @@ from app.ai_service import (
 )
 from app.routers.tafsir import router as tafsir_router
 
-app = FastAPI()
-app.add_middleware(SessionMiddleware, secret_key="super_secret_academic_key")
-app.include_router(tafsir_router, prefix="/api/tafsir", tags=["tafsir"])
+TEMP_AUDIO_DIR = os.path.join(os.path.abspath("."), "temp_audio")
 
 def init_analytics_db():
     conn = sqlite3.connect("users.db")
@@ -92,15 +91,18 @@ def init_analytics_db():
     conn.commit()
     conn.close()
 
-TEMP_AUDIO_DIR = os.path.join(os.path.abspath("."), "temp_audio")
-
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     init_analytics_db()
     os.makedirs(TEMP_AUDIO_DIR, exist_ok=True)
     print(f"Created/Verified temporary audio folder at: {TEMP_AUDIO_DIR}")
     print("Initializing Whisper AI Model (tarteel-ai/whisper-base-ar-quran)...")
     asyncio.create_task(asyncio.to_thread(init_whisper_model))
+    yield
+
+app = FastAPI(lifespan=lifespan)
+app.add_middleware(SessionMiddleware, secret_key="super_secret_academic_key")
+app.include_router(tafsir_router, prefix="/api/tafsir", tags=["tafsir"])
 
 # DIRECTORY MOUNTS
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -480,110 +482,94 @@ def to_arabic_digits(num: int) -> str:
     arabic_digits = "٠١٢٣٤٥٦٧٨٩"
     return "".join(arabic_digits[int(d)] for d in str(num))
 
+def get_words_metadata_for_range(mode: str, start_val: int, end_val: int) -> tuple[str, list[dict], list[dict]]:
+    """
+    Returns (expected_full_text, pages_list, words_metadata) for the given Quran range.
+    Each metadata item contains {"sura": s, "ayah": a, "page": p, "surah_name": name, "word": w}.
+    """
+    try:
+        conn_text = sqlite3.connect("file2.db")
+        cursor_text = conn_text.cursor()
+        cursor_text.execute("PRAGMA table_info(quran_text)")
+        columns = [info[1] for info in cursor_text.fetchall()]
+        text_col = next((col for col in ["text_uthmani", "text", "ayah_text", "content", "ar"] if col in columns), "text")
+
+        conn_map = sqlite3.connect("file1.db")
+        cursor_map = conn_map.cursor()
+
+        query = "SELECT page_number, sura_number, ayah_number FROM glyphs_publication_1 WHERE "
+        if mode == "page":
+            cursor_map.execute(query + "page_number BETWEEN ? AND ? GROUP BY page_number, sura_number, ayah_number ORDER BY page_number, sura_number, ayah_number", (int(start_val), int(end_val)))
+        elif mode == "surah":
+            cursor_map.execute(query + "sura_number BETWEEN ? AND ? GROUP BY page_number, sura_number, ayah_number ORDER BY sura_number, ayah_number", (int(start_val), int(end_val)))
+        elif mode == "juz":
+            juz_bounds = [
+                (1, 21), (22, 41), (42, 61), (62, 81), (82, 101),
+                (102, 121), (122, 141), (142, 161), (162, 181), (182, 201),
+                (202, 221), (222, 241), (242, 261), (262, 281), (282, 301),
+                (302, 321), (322, 341), (342, 361), (362, 381), (382, 401),
+                (402, 421), (422, 441), (442, 461), (462, 481), (482, 501),
+                (502, 521), (522, 541), (542, 561), (562, 581), (582, 604)
+            ]
+            j_idx = max(1, min(30, int(start_val))) - 1
+            sp, ep = juz_bounds[j_idx]
+            cursor_map.execute(query + "page_number BETWEEN ? AND ? GROUP BY page_number, sura_number, ayah_number ORDER BY page_number, sura_number, ayah_number", (sp, ep))
+        else:
+            cursor_map.execute(query + "page_number BETWEEN ? AND ? GROUP BY page_number, sura_number, ayah_number ORDER BY page_number, sura_number, ayah_number", (int(start_val), int(end_val)))
+
+        rows = cursor_map.fetchall()
+        conn_map.close()
+
+        pages_dict = {}
+        all_texts = []
+        word_metadata = []
+
+        for r in rows:
+            p_num, sura, ayah = r[0], r[1], r[2]
+            cursor_text.execute(f"SELECT {text_col} FROM quran_text WHERE surah_number = ? AND ayah_number = ?", (sura, ayah))
+            t_row = cursor_text.fetchone()
+            if t_row and t_row[0]:
+                txt = t_row[0]
+                all_texts.append(txt)
+                formatted_txt = f"{txt} ﴿{to_arabic_digits(ayah)}﴾"
+                if p_num not in pages_dict:
+                    pages_dict[p_num] = []
+                pages_dict[p_num].append(formatted_txt)
+
+                s_name = SURAH_NAMES[sura] if 1 <= sura <= 114 else f"Surah {sura}"
+                for w in txt.split():
+                    word_metadata.append({
+                        "sura": sura,
+                        "ayah": ayah,
+                        "page": p_num,
+                        "surah_name": s_name,
+                        "word": w
+                    })
+
+        conn_text.close()
+        expected_text = " ".join(all_texts)
+        pages_list = [
+            {"page_number": p, "label": f"Page {p}", "text": " ".join(txts)}
+            for p, txts in sorted(pages_dict.items())
+        ]
+        return expected_text, pages_list, word_metadata
+    except Exception as e:
+        logger.error(f"Error getting words metadata for range: {e}")
+        return "", [], []
+
 # ==========================================
 # 3. TASMEE ROUTES (PAGINATED RANGE SUPPORT)
 # ==========================================
 @app.get("/api/tasmee_target")
 async def get_tasmee_target(mode: str, start_val: int, end_val: int):
-    try:
-        conn_text = sqlite3.connect("file2.db")
-        cursor_text = conn_text.cursor()
-        
-        cursor_text.execute("PRAGMA table_info(quran_text)")
-        columns = [info[1] for info in cursor_text.fetchall()]
-        
-        text_col = "text" 
-        for col in ["text_uthmani", "text", "ayah_text", "content", "ar"]:
-            if col in columns:
-                text_col = col
-                break
-        
-        expected_text = ""
-        pages_list = []
-        
-        if mode == "page":
-            conn_map = sqlite3.connect("file1.db")
-            cursor_map = conn_map.cursor()
-            cursor_map.execute("""
-                SELECT page_number, sura_number, ayah_number 
-                FROM glyphs_publication_1 
-                WHERE page_number BETWEEN ? AND ?
-                GROUP BY page_number, sura_number, ayah_number
-                ORDER BY page_number, sura_number, ayah_number
-            """, (start_val, end_val))
-            rows = cursor_map.fetchall()
-            conn_map.close()
-            
-            pages_dict = {}
-            all_texts = []
-            for r in rows:
-                p_num, sura, ayah = r[0], r[1], r[2]
-                cursor_text.execute(f"SELECT {text_col} FROM quran_text WHERE surah_number = ? AND ayah_number = ?", (sura, ayah))
-                t_row = cursor_text.fetchone()
-                if t_row and t_row[0]:
-                    txt = t_row[0]
-                    all_texts.append(txt)
-                    formatted_txt = f"{txt} ﴿{to_arabic_digits(ayah)}﴾"
-                    if p_num not in pages_dict:
-                        pages_dict[p_num] = []
-                    pages_dict[p_num].append(formatted_txt)
-                    
-            expected_text = " ".join(all_texts)
-            pages_list = [
-                {"page_number": p, "label": f"Page {p}", "text": " ".join(txts)}
-                for p, txts in sorted(pages_dict.items())
-            ]
-            
-        elif mode == "surah":
-            conn_map = sqlite3.connect("file1.db")
-            cursor_map = conn_map.cursor()
-            cursor_map.execute("""
-                SELECT page_number, sura_number, ayah_number 
-                FROM glyphs_publication_1 
-                WHERE sura_number BETWEEN ? AND ?
-                GROUP BY page_number, sura_number, ayah_number
-                ORDER BY page_number, sura_number, ayah_number
-            """, (start_val, end_val))
-            rows = cursor_map.fetchall()
-            conn_map.close()
-            
-            pages_dict = {}
-            all_texts = []
-            for r in rows:
-                p_num, sura, ayah = r[0], r[1], r[2]
-                cursor_text.execute(f"SELECT {text_col} FROM quran_text WHERE surah_number = ? AND ayah_number = ?", (sura, ayah))
-                t_row = cursor_text.fetchone()
-                if t_row and t_row[0]:
-                    txt = t_row[0]
-                    all_texts.append(txt)
-                    formatted_txt = f"{txt} ﴿{to_arabic_digits(ayah)}﴾"
-                    if p_num not in pages_dict:
-                        pages_dict[p_num] = []
-                    pages_dict[p_num].append(formatted_txt)
-                    
-            expected_text = " ".join(all_texts)
-            pages_list = [
-                {
-                    "page_number": p, 
-                    "label": f"Page {p}", 
-                    "text": " ".join(txts)
-                } 
-                for p, txts in sorted(pages_dict.items())
-            ]
-                
-        conn_text.close()
-        
-        if not expected_text:
-            return {"error": "No text found for this selection in the database."}
-            
-        return {
-            "expected_text": expected_text,
-            "pages": pages_list
-        }
-        
-    except Exception as e:
-        print(f"Database Error: {e}")
-        return {"error": f"Database Error: {str(e)}"}
+    expected_text, pages_list, word_metadata = get_words_metadata_for_range(mode, start_val, end_val)
+    if not expected_text:
+        return {"error": "No text found for this selection in the database."}
+    return {
+        "expected_text": expected_text,
+        "pages": pages_list,
+        "verse_metadata": word_metadata
+    }
 
 @app.post("/api/tasmee_chunk_process")
 async def process_tasmee_chunk(file: UploadFile = File(...), expected_word: str = Form(...)):
@@ -713,8 +699,20 @@ def _generate_ikhtebaar_logic(mode: str, start_val: int, end_val: int, difficult
         stop_text = get_text(selected_stop[0], selected_stop[1])
         
         full_text_list = []
+        verse_metadata_list = []
         for i in range(start_idx, stop_idx + 1):
-            full_text_list.append(get_text(ayahs_pool[i][0], ayahs_pool[i][1]))
+            s_i, a_i, p_i = ayahs_pool[i][0], ayahs_pool[i][1], ayahs_pool[i][2]
+            txt_i = get_text(s_i, a_i)
+            full_text_list.append(txt_i)
+            s_name_i = SURAH_NAMES[s_i] if 1 <= s_i <= 114 else f"Surah {s_i}"
+            for w in txt_i.split():
+                verse_metadata_list.append({
+                    "sura": s_i,
+                    "ayah": a_i,
+                    "page": p_i,
+                    "surah_name": s_name_i,
+                    "word": w
+                })
         expected_full_text = " ".join(full_text_list)
 
         cursor_map.execute("SELECT sura_number, ayah_number FROM glyphs_publication_1 WHERE page_number = ? ORDER BY sura_number, ayah_number LIMIT 1", (target_page,))
@@ -759,6 +757,7 @@ def _generate_ikhtebaar_logic(mode: str, start_val: int, end_val: int, difficult
             "stop_text": stop_text,
             "end_arabic_text": stop_text,
             "expected_full_text": expected_full_text,
+            "verse_metadata": verse_metadata_list,
             "end_surah_number": end_surah_num,
             "end_surah_name": end_surah_name,
             "end_ayah_number": end_ayah_number,
@@ -850,14 +849,15 @@ async def process_live_recitation_chunk(sess: RecitationSession, new_audio_bytes
             "model_loaded": is_model_ready()
         }
 
-    # ── Step 4: Whisper Inference with ALREADY-SAID context prompt ───────────
-    # Passing the last few CONFIRMED words provides natural conversational context.
-    already_said_start = max(0, sess.confirmed_index - 6)
-    already_said_prompt = " ".join(sess.display_words[already_said_start:sess.confirmed_index])
+    # ── Step 4: Whisper Inference with Quranic Context Guidance ─────────────
+    # Biases the ASR decoder towards authentic Quranic orthography and prevents acoustic drift
+    already_said_start = max(0, sess.confirmed_index - 4)
+    upcoming_end = min(sess.total_words, sess.confirmed_index + 10)
+    chunk_prompt = " ".join(sess.display_words[already_said_start:upcoming_end])
 
     transcription = await transcribe_audio_file(
         audio_bytes=sess.rolling_buffer,
-        initial_prompt=already_said_prompt,
+        initial_prompt=chunk_prompt,
         max_new_tokens=48
     )
 
@@ -1075,12 +1075,16 @@ def finalize_recitation_session(sess: RecitationSession, session_id: str, reques
         {
             "word": w["word"],
             "status": "match" if w["status"] in ("correct", "bismillah_skipped") else "mistake",
-            "raw_status": w["status"]
+            "raw_status": w.get("status", "mistake"),
+            "sura": w.get("sura", 1),
+            "ayah": w.get("ayah", 1),
+            "page": w.get("page", 1),
+            "surah_name": w.get("surah_name", "")
         }
         for w in sess.word_status
     ]
 
-    user_transcription = " ".join(sess.transcriptions) if sess.transcriptions else ""
+    user_transcription = sess.final_transcription or (" ".join(sess.transcriptions) if sess.transcriptions else "")
 
     result = {
         "status": "success",
@@ -1152,7 +1156,14 @@ def finalize_recitation_session(sess: RecitationSession, session_id: str, reques
 
 # ----------------- IKHTEBAAR STATEFUL ENDPOINTS -----------------
 @app.post("/api/ikhtebaar/start_session")
-async def ikhtebaar_start_session(session_id: str = Form(...), expected_text: str = Form(...)):
+async def ikhtebaar_start_session(
+    session_id: str = Form(...), 
+    expected_text: str = Form(...),
+    range_mode: str = Form("custom"),
+    start_val: int = Form(1),
+    end_val: int = Form(1),
+    question_id: str = Form("")
+):
     if not is_model_ready():
         return {
             "status": "error",
@@ -1160,7 +1171,23 @@ async def ikhtebaar_start_session(session_id: str = Form(...), expected_text: st
             "message": "Whisper AI Quran model is currently initializing. Please wait a moment before reciting.",
             "model_loaded": False
         }
-    sess = RecitationSession(session_id, expected_text, module_type="ikhtebaar")
+    
+    # Extract metadata for words in question if available
+    word_metadata = []
+    try:
+        _, _, word_metadata = get_words_metadata_for_range(range_mode, start_val, end_val)
+    except Exception as e:
+        logger.warning(f"Could not build ikhtebaar word metadata: {e}")
+
+    sess = RecitationSession(
+        session_id=session_id, 
+        expected_text=expected_text, 
+        module_type="ikhtebaar",
+        range_mode=range_mode,
+        start_val=start_val,
+        end_val=end_val,
+        word_metadata=word_metadata
+    )
     ikhtebaar_sessions[session_id] = sess
     return {
         "status": "success",
@@ -1202,9 +1229,10 @@ async def final_audio_sweep(sess: RecitationSession, final_audio_bytes: bytes):
     logger.info(f"[FinalSweep] Session {sess.session_id}: Running final full-audio Whisper pass. (Current confirmed_index={sess.confirmed_index}/{sess.total_words})")
 
     try:
+        final_prompt = " ".join(sess.display_words[:40]) if sess.display_words else ""
         final_transcription = await transcribe_audio_file(
             audio_bytes=final_audio_bytes,
-            initial_prompt="",  # Full audio starts from beginning, no prompt bias needed
+            initial_prompt=final_prompt,
             max_new_tokens=256  # Allows full decode of long recitations / full pages
         )
     except Exception as e:
@@ -1214,6 +1242,7 @@ async def final_audio_sweep(sess: RecitationSession, final_audio_bytes: bytes):
     if not final_transcription:
         return
 
+    sess.final_transcription = final_transcription
     sess.transcriptions.append(final_transcription)
     norm_user_words = normalize_arabic(final_transcription).split()
     logger.info(f"[FinalSweep] Final transcription: '{final_transcription}'")
@@ -1273,13 +1302,18 @@ async def tasmee_start_session(
             "message": "Whisper AI Quran model is currently initializing. Please wait a moment before reciting.",
             "model_loaded": False
         }
+    
+    # Retrieve word metadata
+    _, _, word_metadata = get_words_metadata_for_range(range_mode, start_val, end_val)
+
     sess = RecitationSession(
         session_id=session_id,
         expected_text=expected_text,
         module_type="tasmee",
         range_mode=range_mode,
         start_val=start_val,
-        end_val=end_val
+        end_val=end_val,
+        word_metadata=word_metadata
     )
     tasmee_sessions[session_id] = sess
     return {
@@ -1469,13 +1503,24 @@ async def transcribe_and_compare(
                 for i in range(i1, i2):
                     status_map[i] = 'mistake'
 
+        # Retrieve word metadata
+        _, _, word_metadata = get_words_metadata_for_range(range_mode, start_val, end_val)
+
         comparison = []
         match_count = 0
         for idx, w in enumerate(display_words):
             st = status_map.get(idx, 'mistake')
             if st == 'match':
                 match_count += 1
-            comparison.append({"word": w, "status": st})
+            meta = word_metadata[idx] if idx < len(word_metadata) else {}
+            comparison.append({
+                "word": w, 
+                "status": st,
+                "sura": meta.get("sura", 1),
+                "ayah": meta.get("ayah", 1),
+                "page": meta.get("page", 1),
+                "surah_name": meta.get("surah_name", "")
+            })
 
         score = int(round((match_count / len(display_words)) * 100)) if display_words else 0
 
@@ -1824,3 +1869,7 @@ async def get_juz_retention_map(request: Request, juz: int = 1):
     except Exception as e:
         print(f"Retention map error: {e}")
         return {"error": str(e), "verses": [], "mistakes": []}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
