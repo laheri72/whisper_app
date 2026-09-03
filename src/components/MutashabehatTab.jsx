@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   BookOpen, Sparkles, RefreshCw, Search, HelpCircle, Image, ArrowRight, 
   Eye, X, ZoomIn, ZoomOut, Check, ChevronDown, Filter, Type, Layers, 
-  ExternalLink, Hash, CornerDownLeft, Mic, Sparkle
+  ExternalLink, Hash, CornerDownLeft, Mic, Sparkle, Library
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { FULL_SURAH_LIST } from '../utils/juzMapping';
@@ -15,6 +15,7 @@ export const MutashabehatTab = () => {
     setActiveTab = () => {},
     updateTasmee = () => {},
     updateTilawat = () => {},
+    openTafseerForVerse = () => {},
     mutashabehatState = {},
     updateMutashabehat = () => {}
   } = useApp() || {};
@@ -997,6 +998,15 @@ export const MutashabehatTab = () => {
                       >
                         <BookOpen className="w-3.5 h-3.5" />
                         <span>Open in Tilawat</span>
+                      </button>
+
+                      <button
+                        onClick={() => openTafseerForVerse(m.surahNum, m.numberInSurah)}
+                        className="px-3.5 py-1.5 rounded-xl border border-teal-500/30 text-teal-700 dark:text-teal-300 bg-teal-500/10 hover:bg-teal-500/20 font-bold text-[11px] uppercase tracking-wider transition-all flex items-center gap-1.5 shadow-sm"
+                        title="Read classical exegesis for this verse"
+                      >
+                        <Library className="w-3.5 h-3.5 text-teal-400" />
+                        <span>Tafseer</span>
                       </button>
 
                       <button

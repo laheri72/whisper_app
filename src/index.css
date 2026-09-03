@@ -4,25 +4,108 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Rich Classical Arabic Font Definitions */
+@font-face {
+  font-family: 'MQTibyan';
+  src: url('/static/fonts/me_quran.ttf') format('truetype'),
+       url('/fonts/me_quran.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'FFKanz';
+  src: url('/static/fonts/kanz-al-marjaan.ttf') format('truetype'),
+       url('/fonts/kanz-al-marjaan.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'FFAmiri';
+  src: url('/static/fonts/amiri-regular.ttf') format('truetype'),
+       url('/fonts/amiri-regular.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'KMforJamea';
+  src: url('/static/fonts/KMforJamea.ttf') format('truetype'),
+       url('/fonts/KMforJamea.ttf') format('truetype');
+  font-display: swap;
+}
+
+:root {
+  --font-ui-family: 'Inter', 'Outfit', sans-serif;
+  --font-quran-family: 'MQTibyan', 'Scheherazade New', 'Amiri', serif;
+  --font-tafsir-family: 'FFKanz', 'KMforJamea', 'FFAmiri', 'Amiri', 'Scheherazade New', serif;
+}
+
 @layer base {
   body {
-    @apply bg-slate-950 text-slate-100 font-sans antialiased overflow-x-hidden min-h-screen selection:bg-gold-500/30 selection:text-gold-300;
+    @apply bg-slate-950 text-slate-100 font-sans antialiased overflow-x-hidden min-h-screen selection:bg-amber-500/30 selection:text-amber-300;
+    font-family: var(--font-ui-family), sans-serif;
+  }
+  
+  .light body {
+    @apply bg-slate-100 text-slate-900;
+    font-family: var(--font-ui-family), sans-serif;
   }
 }
 
-/* Glassmorphism utility components */
-.glass-panel {
-  background: rgba(15, 23, 42, 0.75);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(212, 175, 55, 0.15);
+/* Rich Quranic & Tafseer Typography Classes */
+.font-quran {
+  font-family: var(--font-quran-family) !important;
+  letter-spacing: 0px;
 }
 
+.font-tafsir {
+  font-family: var(--font-tafsir-family) !important;
+  line-height: 2.3;
+}
+
+.font-kanz {
+  font-family: 'FFKanz', 'KMforJamea', 'FFAmiri', serif !important;
+}
+
+.font-amiri {
+  font-family: 'FFAmiri', 'Amiri', serif !important;
+}
+
+/* Glassmorphism & Panel Styling - Dark Mode */
+.dark .glass-panel,
+.glass-panel {
+  background: rgba(15, 23, 42, 0.78);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(212, 175, 55, 0.18);
+  color: #f8fafc;
+}
+
+.dark .glass-panel-gold,
 .glass-panel-gold {
-  background: linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.9) 100%);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(245, 158, 11, 0.25);
+  background: linear-gradient(135deg, rgba(30, 41, 59, 0.85) 0%, rgba(15, 23, 42, 0.95) 100%);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(245, 158, 11, 0.3);
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+}
+
+/* Glassmorphism & Panel Styling - Light Mode */
+.light .glass-panel {
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid #cbd5e1;
+  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.05);
+  color: #0f172a;
+}
+
+.light .glass-panel-gold {
+  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(217, 119, 6, 0.35);
+  box-shadow: 0 8px 25px -4px rgba(217, 119, 6, 0.12);
+  color: #0f172a;
 }
 
 .gold-gradient-text {
@@ -36,7 +119,7 @@
   box-shadow: 0 0 15px rgba(245, 158, 11, 0.15);
 }
 
-/* Custom scrollbars */
+/* Custom Scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -46,11 +129,36 @@
   background: rgba(15, 23, 42, 0.6);
 }
 
+.light ::-webkit-scrollbar-track {
+  background: rgba(226, 232, 240, 0.8);
+}
+
 ::-webkit-scrollbar-thumb {
   background: rgba(100, 116, 139, 0.4);
   border-radius: 9999px;
 }
 
+.light ::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.6);
+}
+
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(245, 158, 11, 0.6);
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.3);
+  border-radius: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(20, 184, 166, 0.5);
 }

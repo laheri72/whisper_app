@@ -4,6 +4,7 @@ import { Header } from './components/Header';
 import { Login } from './components/Login';
 import { OnboardingModal } from './components/OnboardingModal';
 import { TilawatTab } from './components/TilawatTab';
+import { TafseerTab } from './components/TafseerTab';
 import { TasmeeTab } from './components/TasmeeTab';
 import { IkhtebaarTab } from './components/IkhtebaarTab';
 import { AnalyticsTab } from './components/AnalyticsTab';
@@ -150,6 +151,9 @@ export function App() {
                 <div className="max-w-7xl w-full mx-auto h-full">
                   <div className={activeTab === 'tilawat' ? 'block' : 'hidden'}>
                     <TilawatTab activeTab={activeTab} />
+                  </div>
+                  <div className={activeTab === 'tafseer' ? 'block' : 'hidden'}>
+                    <TafseerTab activeTab={activeTab} />
                   </div>
                   <div className={activeTab === 'tasmee' ? 'block' : 'hidden'}>
                     <TasmeeTab />

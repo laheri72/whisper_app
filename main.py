@@ -22,9 +22,11 @@ from app.ai_service import (
     trim_to_last_n_seconds, are_words_phonetically_equivalent, is_model_ready, get_model_health,
     decode_audio_bytes_to_numpy, is_voice_active, align_recited_words
 )
+from app.routers.tafsir import router as tafsir_router
 
 app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key="super_secret_academic_key")
+app.include_router(tafsir_router, prefix="/api/tafsir", tags=["tafsir"])
 
 def init_analytics_db():
     conn = sqlite3.connect("users.db")

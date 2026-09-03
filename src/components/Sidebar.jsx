@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, Mic, Award, GraduationCap, ChevronRight, Activity, Database, Sparkles, Settings } from 'lucide-react';
+import { BookOpen, Mic, Award, GraduationCap, ChevronRight, Activity, Database, Sparkles, Settings, Library } from 'lucide-react';
 import { UserProfile } from './UserProfile';
 
 export const Sidebar = ({ activeTab, setActiveTab, user }) => {
@@ -12,6 +12,15 @@ export const Sidebar = ({ activeTab, setActiveTab, user }) => {
       badge: 'Reading',
       color: 'from-amber-500/20 to-amber-600/10 text-amber-400 border-amber-500/30',
       description: 'Digital Mushaf & Verse Audio'
+    },
+    {
+      id: 'tafseer',
+      label: 'Tafseer',
+      arabic: 'التفسير والبيان',
+      icon: Library,
+      badge: 'Exegesis',
+      color: 'from-teal-500/20 to-teal-600/10 text-teal-400 border-teal-500/30',
+      description: '5 Classical Exegeses & Search'
     },
     {
       id: 'tasmee',

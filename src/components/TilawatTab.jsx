@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { BookOpen, Play, Pause, ChevronLeft, ChevronRight, Volume2, Info, Layers, RefreshCw, FileText, RotateCcw, Activity } from 'lucide-react';
+import { BookOpen, Play, Pause, ChevronLeft, ChevronRight, Volume2, Info, Layers, RefreshCw, FileText, RotateCcw, Activity, Library } from 'lucide-react';
 import { getJuzPageRange, JUZ_LIST, SURAH_LIST } from '../utils/juzMapping';
+import { useApp } from '../context/AppContext';
 
 export const TilawatTab = ({ activeTab }) => {
+  const { openTafseerForVerse = () => {} } = useApp() || {};
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedJuz, setSelectedJuz] = useState(1);
   const [selectedSurah, setSelectedSurah] = useState(1);
@@ -569,13 +571,21 @@ export const TilawatTab = ({ activeTab }) => {
                 </div>
 
                 {/* Primary Play/Pause Controls */}
-                <div className="pt-2 flex items-center gap-3">
+                <div className="pt-2 flex flex-col gap-2">
                   <button
                     onClick={togglePlayback}
-                    className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-extrabold text-xs flex items-center justify-center gap-2 shadow-gold-glow transition-all"
+                    className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-extrabold text-xs flex items-center justify-center gap-2 shadow-gold-glow transition-all"
                   >
                     {isPlayingAudio ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-slate-950" />}
                     <span>{isPlayingAudio ? "Pause Audio" : "Play Verse Audio"}</span>
+                  </button>
+
+                  <button
+                    onClick={() => openTafseerForVerse(selectedAyah.sura, selectedAyah.ayah)}
+                    className="w-full py-2.5 px-4 rounded-xl bg-teal-500/15 hover:bg-teal-500/25 border border-teal-500/30 text-teal-300 font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-sm"
+                  >
+                    <Library className="w-4 h-4" />
+                    <span>Read Tafseer & Commentary (تفسير الآية)</span>
                   </button>
                 </div>
               </div>

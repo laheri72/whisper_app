@@ -20,24 +20,24 @@ export const IkhtebaarTab = () => {
   const audioPlayerRef = useRef(null);
 
   const {
-    rangeMode,
-    selectedJuz,
-    fromPage,
-    toPage,
-    startSurah,
-    endSurah,
-    difficulty,
-    currentQuestion,
-    excludedQuestions,
-    activeHint,
-    gradeResult,
-    elapsedSeconds,
-    recordedAudioUrl,
-    recordedAudioBlob,
-    whisperCorrections,
-    transcriptionData,
-    isPaused
-  } = ikhtebaarState;
+    rangeMode = 'juz',
+    selectedJuz = 1,
+    fromPage = 1,
+    toPage = 21,
+    startSurah = 112,
+    endSurah = 112,
+    difficulty = 'medium',
+    currentQuestion = null,
+    excludedQuestions = [],
+    activeHint = null,
+    gradeResult = null,
+    elapsedSeconds = 0,
+    recordedAudioUrl = '',
+    recordedAudioBlob = null,
+    whisperCorrections = '',
+    transcriptionData = [],
+    isPaused = false
+  } = ikhtebaarState || {};
 
   // Stateful setters mapped to context updates
   const setRangeMode = (val) => updateIkhtebaar({ rangeMode: typeof val === 'function' ? val(rangeMode) : val });

@@ -21,24 +21,24 @@ export const TasmeeTab = () => {
   const audioPlayerRef = useRef(null);
 
   const {
-    rangeMode,
-    selectedJuz,
-    fromPage,
-    toPage,
-    startSurah,
-    endSurah,
-    expectedText,
-    paginatedPages,
-    activePageIndex,
-    textError,
-    evaluationResult,
-    elapsedSeconds,
-    recordedAudioUrl,
-    recordedAudioBlob,
-    whisperCorrections,
-    transcriptionData,
-    isPaused
-  } = tasmeeState;
+    rangeMode = 'juz',
+    selectedJuz = 1,
+    fromPage = 1,
+    toPage = 21,
+    startSurah = 112,
+    endSurah = 112,
+    expectedText = '',
+    paginatedPages = [],
+    activePageIndex = 0,
+    textError = '',
+    evaluationResult = null,
+    elapsedSeconds = 0,
+    recordedAudioUrl = '',
+    recordedAudioBlob = null,
+    whisperCorrections = '',
+    transcriptionData = [],
+    isPaused = false
+  } = tasmeeState || {};
 
   // Stateful setters mapped to context updates
   const setRangeMode = (val) => updateTasmee({ rangeMode: typeof val === 'function' ? val(rangeMode) : val });
@@ -588,7 +588,7 @@ export const TasmeeTab = () => {
     evaluationResult?.total_words ??
     evaluationResult?.comparison?.length ??
     0;
-  const currentDisplayPage = paginatedPages.length > 0 ? paginatedPages[activePageIndex] : null;
+  const currentDisplayPage = (paginatedPages && paginatedPages.length > 0) ? paginatedPages[activePageIndex] : null;
 
   return (
     <div className="space-y-6 pb-12">
