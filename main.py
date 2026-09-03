@@ -9,6 +9,8 @@ import asyncio
 import logging
 
 logger = logging.getLogger(__name__)
+from typing import Optional, List, Union
+from pydantic import BaseModel
 from fastapi import FastAPI, Request, Form, UploadFile, File, Response, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
@@ -53,6 +55,36 @@ def init_analytics_db():
             error_count INTEGER DEFAULT 1,
             last_missed DATETIME DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(username, norm_word)
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ayah_retention_state (
+            username TEXT,
+            surah_number INTEGER,
+            ayah_number INTEGER,
+            page_number INTEGER,
+            juz_number INTEGER,
+            total_attempts INTEGER DEFAULT 0,
+            consecutive_passes INTEGER DEFAULT 0,
+            current_status TEXT DEFAULT 'unattempted',
+            last_attempt_timestamp DATETIME,
+            last_mistake_timestamp DATETIME,
+            last_cured_timestamp DATETIME,
+            active_mistake_words TEXT DEFAULT '[]',
+            PRIMARY KEY (username, surah_number, ayah_number)
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS session_verse_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT,
+            username TEXT,
+            surah_number INTEGER,
+            ayah_number INTEGER,
+            page_number INTEGER,
+            status TEXT,
+            missed_words TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.commit()
@@ -501,28 +533,40 @@ async def get_tasmee_target(mode: str, start_val: int, end_val: int):
             ]
             
         elif mode == "surah":
-            cursor_text.execute(f"SELECT surah_number, ayah_number, {text_col} FROM quran_text WHERE surah_number BETWEEN ? AND ? ORDER BY surah_number, ayah_number", (start_val, end_val))
-            rows = cursor_text.fetchall()
+            conn_map = sqlite3.connect("file1.db")
+            cursor_map = conn_map.cursor()
+            cursor_map.execute("""
+                SELECT page_number, sura_number, ayah_number 
+                FROM glyphs_publication_1 
+                WHERE sura_number BETWEEN ? AND ?
+                GROUP BY page_number, sura_number, ayah_number
+                ORDER BY page_number, sura_number, ayah_number
+            """, (start_val, end_val))
+            rows = cursor_map.fetchall()
+            conn_map.close()
             
-            surah_dict = {}
+            pages_dict = {}
             all_texts = []
             for r in rows:
-                s_num, a_num, txt = r[0], r[1], r[2]
-                if txt:
+                p_num, sura, ayah = r[0], r[1], r[2]
+                cursor_text.execute(f"SELECT {text_col} FROM quran_text WHERE surah_number = ? AND ayah_number = ?", (sura, ayah))
+                t_row = cursor_text.fetchone()
+                if t_row and t_row[0]:
+                    txt = t_row[0]
                     all_texts.append(txt)
-                    formatted_txt = f"{txt} ﴿{to_arabic_digits(a_num)}﴾"
-                    if s_num not in surah_dict:
-                        surah_dict[s_num] = []
-                    surah_dict[s_num].append(formatted_txt)
+                    formatted_txt = f"{txt} ﴿{to_arabic_digits(ayah)}﴾"
+                    if p_num not in pages_dict:
+                        pages_dict[p_num] = []
+                    pages_dict[p_num].append(formatted_txt)
                     
             expected_text = " ".join(all_texts)
             pages_list = [
                 {
-                    "page_number": s, 
-                    "label": f"Surah {SURAH_NAMES[s] if 1 <= s < len(SURAH_NAMES) else s}", 
+                    "page_number": p, 
+                    "label": f"Page {p}", 
                     "text": " ".join(txts)
                 } 
-                for s, txts in sorted(surah_dict.items())
+                for p, txts in sorted(pages_dict.items())
             ]
                 
         conn_text.close()
@@ -558,8 +602,15 @@ async def process_tasmee_chunk(file: UploadFile = File(...), expected_word: str 
 # ==========================================
 # 4. IKHTEBAAR ROUTES (REMOVED JUZ)
 # ==========================================
-@app.get("/api/generate_ikhtebaar")
-async def generate_ikhtebaar(mode: str, start_val: int, end_val: int, difficulty: str, exclude: str = ""):
+class IkhtebaarQuestionRequest(BaseModel):
+    mode: Optional[str] = "page"
+    start_val: Optional[Union[int, str]] = 1
+    end_val: Optional[Union[int, str]] = 1
+    difficulty: Optional[str] = "easy"
+    exclude: Optional[str] = ""
+    excluded_ids: Optional[List[str]] = []
+
+def _generate_ikhtebaar_logic(mode: str, start_val: int, end_val: int, difficulty: str, exclude_list: list):
     try:
         conn_map = sqlite3.connect("file1.db")
         cursor_map = conn_map.cursor()
@@ -568,11 +619,12 @@ async def generate_ikhtebaar(mode: str, start_val: int, end_val: int, difficulty
         cursor_text = conn_text.cursor()
         
         excluded_set = set()
-        if exclude:
-            for item in exclude.split(","):
-                if "-" in item:
-                    s, a = item.split("-")
-                    excluded_set.add((int(s), int(a)))
+        if exclude_list:
+            for item in exclude_list:
+                if isinstance(item, str) and "-" in item:
+                    parts = item.split("-")
+                    if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                        excluded_set.add((int(parts[0]), int(parts[1])))
 
         cursor_text.execute("PRAGMA table_info(quran_text)")
         columns = [info[1] for info in cursor_text.fetchall()]
@@ -695,6 +747,7 @@ async def generate_ikhtebaar(mode: str, start_val: int, end_val: int, difficulty
 
         return {
             "question_id": f"{selected_start[0]}-{selected_start[1]}", 
+            "surah_number": surah_num,
             "surah_name": surah_name,
             "ayah_number": ayah_number,
             "page_number": target_page,
@@ -704,6 +757,7 @@ async def generate_ikhtebaar(mode: str, start_val: int, end_val: int, difficulty
             "stop_text": stop_text,
             "end_arabic_text": stop_text,
             "expected_full_text": expected_full_text,
+            "end_surah_number": end_surah_num,
             "end_surah_name": end_surah_name,
             "end_ayah_number": end_ayah_number,
             "end_page_number": end_page_number,
@@ -715,6 +769,34 @@ async def generate_ikhtebaar(mode: str, start_val: int, end_val: int, difficulty
     except Exception as e:
         print(f"Ikhtebaar Error: {e}")
         return {"error": str(e)}
+
+@app.get("/api/generate_ikhtebaar")
+async def generate_ikhtebaar_get(mode: str = "page", start_val: int = 1, end_val: int = 1, difficulty: str = "easy", exclude: str = ""):
+    exclude_list = [item for item in exclude.split(",") if item] if exclude else []
+    return _generate_ikhtebaar_logic(mode, int(start_val), int(end_val), difficulty, exclude_list)
+
+@app.post("/api/generate_ikhtebaar")
+async def generate_ikhtebaar_post(req: IkhtebaarQuestionRequest):
+    exclude_list = list(req.excluded_ids or [])
+    if req.exclude:
+        for item in req.exclude.split(","):
+            if item and item not in exclude_list:
+                exclude_list.append(item)
+    return _generate_ikhtebaar_logic(req.mode or "page", int(req.start_val or 1), int(req.end_val or 1), req.difficulty or "easy", exclude_list)
+
+@app.get("/api/ikhtebaar/question")
+async def get_ikhtebaar_question(mode: str = "page", start_val: int = 1, end_val: int = 1, difficulty: str = "easy", exclude: str = ""):
+    exclude_list = [item for item in exclude.split(",") if item] if exclude else []
+    return _generate_ikhtebaar_logic(mode, int(start_val), int(end_val), difficulty, exclude_list)
+
+@app.post("/api/ikhtebaar/question")
+async def post_ikhtebaar_question(req: IkhtebaarQuestionRequest):
+    exclude_list = list(req.excluded_ids or [])
+    if req.exclude:
+        for item in req.exclude.split(","):
+            if item and item not in exclude_list:
+                exclude_list.append(item)
+    return _generate_ikhtebaar_logic(req.mode or "page", int(req.start_val or 1), int(req.end_val or 1), req.difficulty or "easy", exclude_list)
 
 async def process_live_recitation_chunk(sess: RecitationSession, new_audio_bytes: bytes):
     # ── Step 1: Merge incoming chunk into rolling buffer ──────────────────────
@@ -829,6 +911,154 @@ async def process_live_recitation_chunk(sess: RecitationSession, new_audio_bytes
         "model_loaded": is_model_ready()
     }
 
+def update_verse_retention_from_session(username: str, session_id: str, range_mode: str, start_val: int, end_val: int, word_status_list: list):
+    """
+    Updates the Ayah-Level Retention State Machine and logs session verse results.
+    Maps words in word_status_list to their respective (sura, ayah, page) in order.
+    """
+    try:
+        conn_map = sqlite3.connect("file1.db")
+        cursor_map = conn_map.cursor()
+        
+        conn_text = sqlite3.connect("file2.db")
+        cursor_text = conn_text.cursor()
+        cursor_text.execute("PRAGMA table_info(quran_text)")
+        columns = [info[1] for info in cursor_text.fetchall()]
+        text_col = next((col for col in ["text_uthmani", "text", "ayah_text", "content", "ar"] if col in columns), "text")
+
+        query = "SELECT DISTINCT page_number, sura_number, ayah_number FROM glyphs_publication_1 WHERE "
+        if range_mode == "page":
+            cursor_map.execute(query + "page_number BETWEEN ? AND ? ORDER BY sura_number, ayah_number", (start_val, end_val))
+        elif range_mode == "surah":
+            cursor_map.execute(query + "sura_number BETWEEN ? AND ? ORDER BY sura_number, ayah_number", (start_val, end_val))
+        elif range_mode == "juz":
+            juz_bounds = [
+                (1, 21), (22, 41), (42, 61), (62, 81), (82, 101),
+                (102, 121), (122, 141), (142, 161), (162, 181), (182, 201),
+                (202, 221), (222, 241), (242, 261), (262, 281), (282, 301),
+                (302, 321), (322, 341), (342, 361), (362, 381), (382, 401),
+                (402, 421), (422, 441), (442, 461), (462, 481), (482, 501),
+                (502, 521), (522, 541), (542, 561), (562, 581), (582, 604)
+            ]
+            j_idx = max(1, min(30, int(start_val))) - 1
+            sp, ep = juz_bounds[j_idx]
+            cursor_map.execute(query + "page_number BETWEEN ? AND ? ORDER BY sura_number, ayah_number", (sp, ep))
+        else:
+            cursor_map.execute(query + "page_number BETWEEN ? AND ? ORDER BY sura_number, ayah_number", (start_val, end_val))
+
+        verses_pool = cursor_map.fetchall()
+        conn_map.close()
+
+        if not verses_pool:
+            conn_text.close()
+            return
+
+        verse_word_map = []
+        for p_num, s_num, a_num in verses_pool:
+            cursor_text.execute(f"SELECT {text_col} FROM quran_text WHERE surah_number = ? AND ayah_number = ?", (s_num, a_num))
+            res = cursor_text.fetchone()
+            txt = res[0] if res else ""
+            words = txt.split()
+            verse_word_map.append({
+                "page_number": p_num,
+                "surah_number": s_num,
+                "ayah_number": a_num,
+                "words": words,
+                "word_count": len(words)
+            })
+        conn_text.close()
+
+        word_idx = 0
+        conn_users = sqlite3.connect("users.db")
+        cursor_users = conn_users.cursor()
+
+        juz_bounds = [
+            (1, 21), (22, 41), (42, 61), (62, 81), (82, 101),
+            (102, 121), (122, 141), (142, 161), (162, 181), (182, 201),
+            (202, 221), (222, 241), (242, 261), (262, 281), (282, 301),
+            (302, 321), (322, 341), (342, 361), (362, 381), (382, 401),
+            (402, 421), (422, 441), (442, 461), (462, 481), (482, 501),
+            (502, 521), (522, 541), (542, 561), (562, 581), (582, 604)
+        ]
+
+        for v in verse_word_map:
+            v_words_count = v["word_count"]
+            v_statuses = word_status_list[word_idx : word_idx + v_words_count]
+            word_idx += v_words_count
+
+            if not v_statuses:
+                continue
+
+            missed_words = []
+            for item in v_statuses:
+                st = item.get("status") if isinstance(item, dict) else "mistake"
+                w = item.get("word") if isinstance(item, dict) else str(item)
+                if st not in ("match", "correct", "bismillah_skipped"):
+                    missed_words.append(w)
+
+            is_pass = len(missed_words) == 0
+            p = v["page_number"]
+            juz_num = 1
+            for j_i, (b_s, b_e) in enumerate(juz_bounds):
+                if b_s <= p <= b_e:
+                    juz_num = j_i + 1
+                    break
+
+            cursor_users.execute("""
+                INSERT INTO session_verse_logs (session_id, username, surah_number, ayah_number, page_number, status, missed_words)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (session_id, username, v["surah_number"], v["ayah_number"], v["page_number"], "pass" if is_pass else "fail", json.dumps(missed_words)))
+
+            cursor_users.execute("""
+                SELECT current_status, consecutive_passes, total_attempts 
+                FROM ayah_retention_state 
+                WHERE username = ? AND surah_number = ? AND ayah_number = ?
+            """, (username, v["surah_number"], v["ayah_number"]))
+            prev_row = cursor_users.fetchone()
+
+            if is_pass:
+                new_status = "cured" if (prev_row and prev_row[0] == "active_mistake") else "mastered"
+                prev_passes = (prev_row[1] if prev_row else 0) + 1
+                prev_attempts = (prev_row[2] if prev_row else 0) + 1
+
+                cursor_users.execute("""
+                    INSERT INTO ayah_retention_state (
+                        username, surah_number, ayah_number, page_number, juz_number,
+                        total_attempts, consecutive_passes, current_status, last_attempt_timestamp,
+                        last_cured_timestamp, active_mistake_words
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CASE WHEN ? = 'cured' THEN CURRENT_TIMESTAMP ELSE NULL END, '[]')
+                    ON CONFLICT(username, surah_number, ayah_number) DO UPDATE SET
+                        total_attempts = total_attempts + 1,
+                        consecutive_passes = consecutive_passes + 1,
+                        current_status = excluded.current_status,
+                        last_attempt_timestamp = CURRENT_TIMESTAMP,
+                        last_cured_timestamp = CASE WHEN excluded.current_status = 'cured' THEN CURRENT_TIMESTAMP ELSE last_cured_timestamp END,
+                        active_mistake_words = '[]'
+                """, (username, v["surah_number"], v["ayah_number"], v["page_number"], juz_num, prev_attempts, prev_passes, new_status, new_status))
+            else:
+                prev_attempts = (prev_row[2] if prev_row else 0) + 1
+                cursor_users.execute("""
+                    INSERT INTO ayah_retention_state (
+                        username, surah_number, ayah_number, page_number, juz_number,
+                        total_attempts, consecutive_passes, current_status, last_attempt_timestamp,
+                        last_mistake_timestamp, active_mistake_words
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, 0, 'active_mistake', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)
+                    ON CONFLICT(username, surah_number, ayah_number) DO UPDATE SET
+                        total_attempts = total_attempts + 1,
+                        consecutive_passes = 0,
+                        current_status = 'active_mistake',
+                        last_attempt_timestamp = CURRENT_TIMESTAMP,
+                        last_mistake_timestamp = CURRENT_TIMESTAMP,
+                        active_mistake_words = excluded.active_mistake_words
+                """, (username, v["surah_number"], v["ayah_number"], v["page_number"], juz_num, prev_attempts, json.dumps(missed_words)))
+
+        conn_users.commit()
+        conn_users.close()
+    except Exception as err:
+        print(f"Verse retention update error: {err}")
+
 def finalize_recitation_session(sess: RecitationSession, session_id: str, request: Request = None):
     # Any word not yet verified as correct or skipped is marked as a mistake
     for idx in range(sess.total_words):
@@ -903,6 +1133,16 @@ def finalize_recitation_session(sess: RecitationSession, session_id: str, reques
                     """, (username, w_cleaned, w_norm))
         conn.commit()
         conn.close()
+
+        # Update Ayah-Level Retention State Machine
+        update_verse_retention_from_session(
+            username=username,
+            session_id=session_id,
+            range_mode=sess.range_mode,
+            start_val=sess.start_val,
+            end_val=sess.end_val,
+            word_status_list=sess.word_status
+        )
     except Exception as db_err:
         print(f"Recitation analytics log warning: {db_err}")
 
@@ -1328,28 +1568,48 @@ async def get_user_analytics(request: Request):
     mistake_rows = cursor.fetchall()
     frequent_mistakes = [{"word": r[0], "error_count": r[1], "last_missed": r[2]} for r in mistake_rows]
     
-    # 4. Calculate Juz Mastery Heatmap (Juz 1 to 30)
-    cursor.execute("""
-        SELECT start_val, score FROM recitation_sessions
-        WHERE username = ? AND range_mode = 'juz'
-    """, (username,))
-    juz_rows = cursor.fetchall()
-    juz_scores = {}
-    for j_val, sc in juz_rows:
-        if j_val not in juz_scores:
-            juz_scores[j_val] = []
-        juz_scores[j_val].append(sc)
-        
+    # 4. Calculate 30-Juz Retention Heatmap (Juz 1 to 30) from ayah_retention_state & sessions
     juz_heatmap = []
     for j in range(1, 31):
-        scores = juz_scores.get(j, [])
-        avg_juz_score = int(round(sum(scores) / len(scores))) if scores else 0
-        status = "mastered" if avg_juz_score >= 85 else "in_progress" if avg_juz_score >= 60 else "needs_revision" if scores else "unattempted"
+        cursor.execute("""
+            SELECT 
+                COUNT(*) as total_logged,
+                SUM(CASE WHEN current_status IN ('mastered', 'cured') THEN 1 ELSE 0 END) as mastered_or_cured,
+                SUM(CASE WHEN current_status = 'active_mistake' THEN 1 ELSE 0 END) as active_mistakes,
+                SUM(total_attempts) as sum_attempts
+            FROM ayah_retention_state
+            WHERE username = ? AND juz_number = ?
+        """, (username, j))
+        r_state = cursor.fetchone()
+        
+        total_logged = r_state[0] if (r_state and r_state[0]) else 0
+        mastered_cured = r_state[1] if (r_state and r_state[1]) else 0
+        active_mistakes = r_state[2] if (r_state and r_state[2]) else 0
+        sum_attempts = r_state[3] if (r_state and r_state[3]) else 0
+
+        if total_logged > 0:
+            score = int(round((mastered_cured / total_logged) * 100))
+            status = "mastered" if (score >= 85 and active_mistakes == 0) else "in_progress" if score >= 60 else "needs_revision"
+            attempts = sum_attempts or 1
+        else:
+            cursor.execute("SELECT score FROM recitation_sessions WHERE username = ? AND range_mode = 'juz' AND start_val = ?", (username, j))
+            j_sess = cursor.fetchall()
+            if j_sess:
+                sc_list = [s[0] for s in j_sess]
+                score = int(round(sum(sc_list) / len(sc_list)))
+                attempts = len(sc_list)
+                status = "mastered" if score >= 85 else "in_progress" if score >= 60 else "needs_revision"
+            else:
+                score = 0
+                attempts = 0
+                status = "unattempted"
+
         juz_heatmap.append({
             "juz": j,
-            "score": avg_juz_score,
-            "attempts": len(scores),
-            "status": status
+            "score": score,
+            "attempts": attempts,
+            "status": status,
+            "active_mistakes": active_mistakes
         })
         
     conn.close()
@@ -1375,3 +1635,190 @@ async def delete_mistake(request: Request, word: str = Form(...)):
     conn.commit()
     conn.close()
     return {"success": True}
+
+@app.get("/api/locate_word")
+async def locate_word(word: str):
+    """ Locate a word or phrase in the Quran and return its Surah, Ayah, Page, and Arabic text """
+    try:
+        norm_query = normalize_arabic(word).strip()
+        if not norm_query:
+            return {"error": "Empty word query", "results": []}
+
+        conn_text = sqlite3.connect("file2.db")
+        cursor_text = conn_text.cursor()
+        cursor_text.execute("PRAGMA table_info(quran_text)")
+        columns = [info[1] for info in cursor_text.fetchall()]
+        text_col = next((col for col in ["text_uthmani", "text", "ayah_text", "content", "ar"] if col in columns), "text")
+        
+        cursor_text.execute(f"SELECT surah_number, ayah_number, {text_col} FROM quran_text")
+        all_ayahs = cursor_text.fetchall()
+        conn_text.close()
+
+        conn_map = sqlite3.connect("file1.db")
+        cursor_map = conn_map.cursor()
+
+        matches = []
+        for s_num, a_num, txt in all_ayahs:
+            if not txt:
+                continue
+            norm_txt = normalize_arabic(txt)
+            if norm_query in norm_txt:
+                cursor_map.execute("SELECT page_number FROM glyphs_publication_1 WHERE sura_number = ? AND ayah_number = ? LIMIT 1", (s_num, a_num))
+                p_row = cursor_map.fetchone()
+                p_num = p_row[0] if p_row else 1
+                s_name = SURAH_NAMES[s_num] if 1 <= s_num <= 114 else f"Surah {s_num}"
+                matches.append({
+                    "surah_number": s_num,
+                    "surah_name": s_name,
+                    "ayah_number": a_num,
+                    "page_number": p_num,
+                    "arabic_text": txt
+                })
+                if len(matches) >= 5:
+                    break
+
+        conn_map.close()
+        return {"word": word, "results": matches}
+    except Exception as e:
+        print(f"Locate word error: {e}")
+        return {"error": str(e), "results": []}
+
+@app.get("/api/analytics/juz_mistakes")
+async def get_juz_mistakes(request: Request, juz: int):
+    """ Legacy helper: returns mistake occurrences for backwards compatibility """
+    return await get_juz_retention_map(request, juz)
+
+@app.get("/api/analytics/retention_map")
+async def get_juz_retention_map(request: Request, juz: int = 1):
+    """
+    Returns the comprehensive verse-level multi-session retention status for a specific Juz.
+    Includes states: 'active_mistake', 'cured', 'mastered', 'unattempted'.
+    """
+    try:
+        username = request.session.get("user") or "guest"
+        juz_idx = max(1, min(30, int(juz)))
+
+        juz_bounds = [
+            (1, 21), (22, 41), (42, 61), (62, 81), (82, 101),
+            (102, 121), (122, 141), (142, 161), (162, 181), (182, 201),
+            (202, 221), (222, 241), (242, 261), (262, 281), (282, 301),
+            (302, 321), (322, 341), (342, 361), (362, 381), (382, 401),
+            (402, 421), (422, 441), (442, 461), (462, 481), (482, 501),
+            (502, 521), (522, 541), (542, 561), (562, 581), (582, 604)
+        ]
+        start_p, end_p = juz_bounds[juz_idx - 1]
+
+        conn_map = sqlite3.connect("file1.db")
+        cursor_map = conn_map.cursor()
+        cursor_map.execute("""
+            SELECT DISTINCT page_number, sura_number, ayah_number 
+            FROM glyphs_publication_1 
+            WHERE page_number BETWEEN ? AND ?
+            ORDER BY page_number, sura_number, ayah_number
+        """, (start_p, end_p))
+        juz_verses = cursor_map.fetchall()
+        conn_map.close()
+
+        conn_text = sqlite3.connect("file2.db")
+        cursor_text = conn_text.cursor()
+        cursor_text.execute("PRAGMA table_info(quran_text)")
+        columns = [info[1] for info in cursor_text.fetchall()]
+        text_col = next((col for col in ["text_uthmani", "text", "ayah_text", "content", "ar"] if col in columns), "text")
+
+        verse_texts = {}
+        for p, s, a in juz_verses:
+            cursor_text.execute(f"SELECT {text_col} FROM quran_text WHERE surah_number = ? AND ayah_number = ?", (s, a))
+            row = cursor_text.fetchone()
+            verse_texts[(s, a)] = row[0] if row else ""
+        conn_text.close()
+
+        conn_users = sqlite3.connect("users.db")
+        cursor_users = conn_users.cursor()
+        cursor_users.execute("""
+            SELECT surah_number, ayah_number, current_status, consecutive_passes, total_attempts, active_mistake_words, last_attempt_timestamp, last_cured_timestamp
+            FROM ayah_retention_state
+            WHERE username = ? AND juz_number = ?
+        """, (username, juz_idx))
+        state_rows = cursor_users.fetchall()
+        conn_users.close()
+
+        user_states = {}
+        for r in state_rows:
+            user_states[(r[0], r[1])] = {
+                "current_status": r[2],
+                "consecutive_passes": r[3],
+                "total_attempts": r[4],
+                "active_mistake_words": json.loads(r[5]) if r[5] else [],
+                "last_attempt_timestamp": r[6],
+                "last_cured_timestamp": r[7]
+            }
+
+        mastered_count = 0
+        cured_count = 0
+        active_mistake_count = 0
+        unattempted_count = 0
+
+        verses_list = []
+        mistake_pages = set()
+        cured_pages = set()
+
+        for p_num, s_num, a_num in juz_verses:
+            v_state = user_states.get((s_num, a_num))
+            st = v_state["current_status"] if v_state else "unattempted"
+            attempts = v_state["total_attempts"] if v_state else 0
+            passes = v_state["consecutive_passes"] if v_state else 0
+            missed_words = v_state["active_mistake_words"] if v_state else []
+            last_ts = v_state["last_attempt_timestamp"] if v_state else None
+            cured_ts = v_state["last_cured_timestamp"] if v_state else None
+
+            if st == "mastered":
+                mastered_count += 1
+            elif st == "cured":
+                cured_count += 1
+                cured_pages.add(p_num)
+            elif st == "active_mistake":
+                active_mistake_count += 1
+                mistake_pages.add(p_num)
+            else:
+                unattempted_count += 1
+
+            s_name = SURAH_NAMES[s_num] if 1 <= s_num <= 114 else f"Surah {s_num}"
+            verses_list.append({
+                "page_number": p_num,
+                "surah_number": s_num,
+                "surah_name": s_name,
+                "ayah_number": a_num,
+                "status": st,
+                "total_attempts": attempts,
+                "consecutive_passes": passes,
+                "active_mistake_words": missed_words,
+                "last_attempt_timestamp": last_ts,
+                "last_cured_timestamp": cured_ts,
+                "arabic_text": verse_texts.get((s_num, a_num), "")
+            })
+
+        total_v = len(juz_verses)
+        attempted_v = total_v - unattempted_count
+        mastery_pct = int(round(((mastered_count + cured_count) / total_v) * 100)) if total_v > 0 else 0
+
+        return {
+            "juz": juz_idx,
+            "start_page": start_p,
+            "end_page": end_p,
+            "stats": {
+                "total_verses": total_v,
+                "attempted_verses": attempted_v,
+                "mastered_count": mastered_count,
+                "cured_count": cured_count,
+                "active_mistake_count": active_mistake_count,
+                "unattempted_count": unattempted_count,
+                "mastery_percentage": mastery_pct
+            },
+            "verses": verses_list,
+            "mistake_pages": sorted(list(mistake_pages)),
+            "cured_pages": sorted(list(cured_pages)),
+            "mistakes": [v for v in verses_list if v["status"] == "active_mistake"]
+        }
+    except Exception as e:
+        print(f"Retention map error: {e}")
+        return {"error": str(e), "verses": [], "mistakes": []}

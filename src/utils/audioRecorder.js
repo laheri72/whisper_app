@@ -33,6 +33,7 @@ export class WaveMediaRecorder {
 
     this.analyser = this.audioContext.createAnalyser();
     this.analyser.fftSize = 64;
+    this.analyser.smoothingTimeConstant = 0.85;
     source.connect(this.analyser);
 
     this.scriptNode = this.audioContext.createScriptProcessor(4096, 1, 1);
@@ -177,6 +178,10 @@ export class WaveMediaRecorder {
         this.onstop(fullBlob);
       }
     }
+  }
+
+  getAnalyser() {
+    return this.analyser;
   }
 
   getCurrentAudioBlob() {

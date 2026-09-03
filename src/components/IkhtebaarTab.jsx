@@ -1,15 +1,24 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Award, HelpCircle, ChevronDown, ChevronUp, Mic, MicOff, RefreshCw, CheckCircle2, AlertCircle, Sparkles, Zap, Shield, Flame, BookOpen, Pause, Play, Download, X, Trash2, Volume2, RotateCcw } from 'lucide-react';
-import { getJuzPageRange, JUZ_LIST, SURAH_LIST } from '../utils/juzMapping';
+import { 
+  Award, HelpCircle, ChevronDown, ChevronUp, Mic, MicOff, RefreshCw, 
+  CheckCircle2, AlertCircle, Sparkles, BookOpen, Pause, Play, Download, 
+  X, Trash2, Volume2, ZoomIn, ZoomOut, ExternalLink, Eye, ChevronLeft, ChevronRight 
+} from 'lucide-react';
+import { getJuzPageRange, JUZ_LIST, SURAH_LIST, FULL_SURAH_LIST } from '../utils/juzMapping';
 import { WaveMediaRecorder } from '../utils/audioRecorder';
 import { AudioVisualizer } from './AudioVisualizer';
 import { useApp } from '../context/AppContext';
-import { getPageFromManuscript } from '../utils/quranLookup';
 
 export const IkhtebaarTab = () => {
-  const { ikhtebaarState, updateIkhtebaar, quranData, fetchQuranData, loadingJson, isModelReady, modelStatus, modelError } = useApp();
+  const { 
+    ikhtebaarState, updateIkhtebaar, quranData, fetchQuranData, 
+    loadingJson, isModelReady, modelStatus, modelError,
+    setActiveTab = () => {}, updateTilawat = () => {}
+  } = useApp();
+
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
   const audioPlayerRef = useRef(null);
+
   const {
     rangeMode,
     selectedJuz,
@@ -46,9 +55,6 @@ export const IkhtebaarTab = () => {
   // Transient UI states
   const [isLoadingQuestion, setIsLoadingQuestion] = useState(false);
   const [questionError, setQuestionError] = useState('');
-  const [isZoomed, setIsZoomed] = useState(false);
-  const [zoomedPageList, setZoomedPageList] = useState([]);
-  const [currentZoomedIndex, setCurrentZoomedIndex] = useState(0);
   const [isStartingRecording, setIsStartingRecording] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isFinalizingStream, setIsFinalizingStream] = useState(false);
@@ -60,6 +66,15 @@ export const IkhtebaarTab = () => {
   const [nudgeActive, setNudgeActive] = useState(false);
   const [nudgeText, setNudgeText] = useState('');
 
+  // Multi-Page Manuscript Lightbox Modal State with Dual-Anchor Highlights
+  const [isZoomed, setIsZoomed] = useState(false);
+  const [zoomedPageList, setZoomedPageList] = useState([]);
+  const [currentZoomedIndex, setCurrentZoomedIndex] = useState(0);
+  const [modalBoxes, setModalBoxes] = useState([]);
+  const [loadingModalBoxes, setLoadingModalBoxes] = useState(false);
+  const [modalDimensions, setModalDimensions] = useState({ width: 1000, height: 1000 });
+  const [modalZoom, setModalZoom] = useState(1);
+
   const mediaRecorderRef = useRef(null);
   const timerIntervalRef = useRef(null);
   const abortControllerRef = useRef(null);
@@ -68,9 +83,8 @@ export const IkhtebaarTab = () => {
   const chunkIndexRef = useRef(0);
   const sessionIdRef = useRef('');
 
-  // Auto-scroll the real-time transcription container and log updates
+  // Auto-scroll the real-time transcription container
   useEffect(() => {
-    console.log("Exam Transcription Update:", transcriptionData);
     if (correctionsContainerRef.current) {
       correctionsContainerRef.current.scrollTop = correctionsContainerRef.current.scrollHeight;
     }
@@ -105,6 +119,37 @@ export const IkhtebaarTab = () => {
     };
   }, []);
 
+  // Fetch bounding boxes for current modal page
+  const currentModalPage = zoomedPageList[currentZoomedIndex];
+
+  useEffect(() => {
+    if (!isZoomed || !currentModalPage) {
+      setModalBoxes([]);
+      return;
+    }
+
+    let isMounted = true;
+    setLoadingModalBoxes(true);
+    fetch(`/api/page_boxes/${currentModalPage}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (isMounted) {
+          setModalBoxes(data.boxes || []);
+        }
+      })
+      .catch((err) => {
+        console.error('Error fetching page boxes for exam modal:', err);
+        if (isMounted) setModalBoxes([]);
+      })
+      .finally(() => {
+        if (isMounted) setLoadingModalBoxes(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isZoomed, currentModalPage]);
+
   // Handle Keyboard Navigation inside Zoom Modal (RTL logic)
   useEffect(() => {
     if (!isZoomed || zoomedPageList.length === 0) return;
@@ -114,11 +159,11 @@ export const IkhtebaarTab = () => {
         setIsZoomed(false);
       } else if (e.key === 'ArrowLeft') {
         if (currentZoomedIndex < zoomedPageList.length - 1) {
-          setCurrentZoomedIndex(prev => Math.min(zoomedPageList.length - 1, prev + 1));
+          setCurrentZoomedIndex((prev) => prev + 1);
         }
       } else if (e.key === 'ArrowRight') {
         if (currentZoomedIndex > 0) {
-          setCurrentZoomedIndex(prev => Math.max(0, prev - 1));
+          setCurrentZoomedIndex((prev) => prev - 1);
         }
       }
     };
@@ -128,7 +173,6 @@ export const IkhtebaarTab = () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isZoomed, currentZoomedIndex, zoomedPageList]);
-
 
   // Open full manuscript viewer spanning from Start Verse page to Stop Verse page
   const handleViewFullPage = (targetPage = null) => {
@@ -147,7 +191,15 @@ export const IkhtebaarTab = () => {
     const target = targetPage !== null ? Number(targetPage) : startPage;
     const idx = pageRangeList.indexOf(target);
     setCurrentZoomedIndex(idx >= 0 ? idx : 0);
+    setModalZoom(1);
     setIsZoomed(true);
+  };
+
+  const handleJumpToTilawat = (pageNum) => {
+    updateTilawat({
+      pageNumber: Number(pageNum)
+    });
+    setActiveTab('tilawat');
   };
 
   // Fetch AI Question from /api/generate_ikhtebaar
@@ -185,36 +237,25 @@ export const IkhtebaarTab = () => {
       endVal = endSurah;
     }
 
-    const excludeParam = excludedQuestions.join(',');
-
     try {
-      const url = `/api/generate_ikhtebaar?mode=${modeParam}&start_val=${startVal}&end_val=${endVal}&difficulty=${difficulty}&exclude=${excludeParam}`;
-      const res = await fetch(url);
+      const excludeParam = (excludedQuestions || []).join(',');
+      const url = `/api/generate_ikhtebaar?mode=${encodeURIComponent(modeParam)}&start_val=${encodeURIComponent(startVal)}&end_val=${encodeURIComponent(endVal)}&difficulty=${encodeURIComponent(difficulty)}&exclude=${encodeURIComponent(excludeParam)}`;
       
-      if (!res.ok) {
-        throw new Error(`Server returned HTTP status ${res.status}`);
-      }
+      const res = await fetch(url);
+      const data = await res.json();
 
-      const responseData = await res.json();
-      const data = responseData?.data || responseData;
-      const questionPayload = data?.question || data;
-
-      if (questionPayload?.error) {
-        setQuestionError(questionPayload.error);
+      if (data.error) {
+        setQuestionError(data.error);
         setCurrentQuestion(null);
-      } else if (!questionPayload || Object.keys(questionPayload).length === 0) {
-        throw new Error("Empty question payload received from server.");
       } else {
-        console.log("Generated Exam Question:", questionPayload);
-        setCurrentQuestion(questionPayload);
-        if (questionPayload?.question_id) {
-          setExcludedQuestions(prev => [...prev, questionPayload.question_id]);
-        }
+        updateIkhtebaar({
+          currentQuestion: data,
+          excludedQuestions: [...excludedQuestions, data.question_id]
+        });
       }
-    } catch (error) {
-      console.error("Exam generation failed:", error);
-      setQuestionError(error?.message || "Failed to generate exam question. Please check server connection.");
-      setCurrentQuestion(null);
+    } catch (err) {
+      console.error(err);
+      setQuestionError('Failed to generate exam question.');
     } finally {
       setIsLoadingQuestion(false);
     }
@@ -223,12 +264,12 @@ export const IkhtebaarTab = () => {
   // 1. INITIATE RECITATION (Stateful Live Session Streaming Mode)
   const initiateRecitation = async () => {
     if (!currentQuestion) {
-      alert("Please generate an exam question first.");
+      alert('Please generate an exam question before initiating recitation.');
       return;
     }
 
     if (!isModelReady) {
-      alert("Whisper AI Quran model is currently loading weights into memory. Please wait a moment until the status indicator turns green.");
+      alert('AI Recitation model is loading. Please wait a moment until ready.');
       return;
     }
 
@@ -261,7 +302,12 @@ export const IkhtebaarTab = () => {
       // Start server-side stateful session
       const startFormData = new FormData();
       startFormData.append('session_id', sessId);
-      startFormData.append('expected_text', currentQuestion.expected_full_text || '');
+      startFormData.append('expected_text', currentQuestion.expected_full_text || currentQuestion.arabic_text || '');
+      startFormData.append('range_mode', rangeMode);
+      startFormData.append('start_val', rangeMode === 'surah' ? startSurah : rangeMode === 'page' ? fromPage : selectedJuz);
+      startFormData.append('end_val', rangeMode === 'surah' ? endSurah : rangeMode === 'page' ? toPage : selectedJuz);
+      startFormData.append('question_id', currentQuestion.question_id || '');
+
       const startRes = await fetch('/api/ikhtebaar/start_session', {
         method: 'POST',
         body: startFormData,
@@ -288,8 +334,7 @@ export const IkhtebaarTab = () => {
       const recorder = new WaveMediaRecorder(stream);
       mediaRecorderRef.current = recorder;
 
-      // Incremental live chunk handler (every 6 seconds — aligned to server's 6s rolling buffer cap)
-      // IMPORTANT: Returns the fetch Promise so WaveMediaRecorder's mutex releases on server response.
+      // Incremental live chunk handler (every 6 seconds)
       recorder.ondataavailable = (e) => {
         if (!e.data || e.data.size === 0) return Promise.resolve();
 
@@ -299,7 +344,6 @@ export const IkhtebaarTab = () => {
 
         chunkIndexRef.current += 1;
 
-        // Return the Promise — critical for mutex release in WaveMediaRecorder.flushChunk()
         return fetch('/api/ikhtebaar/chunk', {
           method: 'POST',
           body: formData,
@@ -307,8 +351,6 @@ export const IkhtebaarTab = () => {
         }).then(async (res) => {
           if (res.ok) {
             const data = await res.json();
-            console.log("Ikhtebaar Live Chunk Response:", data);
-
             if (data.word_status) {
               updateIkhtebaar({
                 transcriptionData: data.word_status
@@ -317,14 +359,14 @@ export const IkhtebaarTab = () => {
 
             if (data.nudge) {
               setNudgeActive(true);
-              setNudgeText("Take a moment — recite the upcoming word carefully...");
+              setNudgeText('Recite the next word clearly...');
             } else {
               setNudgeActive(false);
             }
           }
         }).catch((err) => {
           if (err.name !== 'AbortError') {
-            console.warn("Live chunk grading failed:", err);
+            console.warn('Live chunk grading failed:', err);
           }
         });
       };
@@ -334,7 +376,7 @@ export const IkhtebaarTab = () => {
         setIsFinalizingStream(false);
         setIsAnalyzing(true);
         setAnalysisProgress(50);
-        setAnalysisStage("Finalizing Exam Grade Assessment...");
+        setAnalysisStage('Grading Recitation...');
 
         const finalUrl = URL.createObjectURL(finalBlob);
         updateIkhtebaar({
@@ -345,32 +387,29 @@ export const IkhtebaarTab = () => {
         try {
           const formData = new FormData();
           formData.append('session_id', sessionIdRef.current);
-          // Send the complete audio so the backend can run a final full-audio Whisper
-          // sweep to confirm any words the rolling chunks missed before grading.
           formData.append('file', finalBlob, 'full_exam.wav');
 
           const response = await fetch('/api/ikhtebaar/conclude_session', {
             method: 'POST',
-            body: formData,
-            signal: abortControllerRef.current?.signal
+            body: formData
           });
 
           if (!response.ok) {
-            throw new Error(`Server returned HTTP status ${response.status}`);
+            const err = await response.json();
+            throw new Error(err.detail || 'Examination grading failed.');
           }
 
           const resultData = await response.json();
           setAnalysisProgress(100);
-          setAnalysisStage("Exam Assessment Complete!");
-          await new Promise(r => setTimeout(r, 200));
+          setAnalysisStage('Assessment Complete!');
+          await new Promise((r) => setTimeout(r, 200));
           setGradeResult(resultData);
-
         } catch (err) {
           if (err.name === 'AbortError') {
-            console.log("Exam conclusion request aborted.");
+            console.log('Exam conclusion request aborted.');
           } else {
-            console.error("Evaluation error:", err);
-            setGradingError("Failed to finalize exam: " + err.message);
+            console.error('Evaluation error:', err);
+            setGradingError('Failed to finalize exam: ' + err.message);
           }
         } finally {
           setIsAnalyzing(false);
@@ -380,25 +419,25 @@ export const IkhtebaarTab = () => {
         }
       };
 
-      // Start recorder with 6-second chunking (aligned to server 6s rolling buffer cap)
+      // Start recorder with 6-second chunking
       recorder.start(6000);
       setAnalyserNode(recorder.getAnalyser());
+      setIsStartingRecording(false);
       setIsRecording(true);
 
+      // Start timer
       timerIntervalRef.current = setInterval(() => {
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-          updateIkhtebaar(prev => ({ elapsedSeconds: prev.elapsedSeconds + 1 }));
-        }
+        updateIkhtebaar((prev) => ({ elapsedSeconds: prev.elapsedSeconds + 1 }));
       }, 1000);
-
     } catch (err) {
-      alert(err.message || "Failed to start microphone recording.");
-    } finally {
+      console.error(err);
+      alert('Microphone access denied or recording failed: ' + err.message);
       setIsStartingRecording(false);
+      setIsRecording(false);
     }
   };
 
-  // 2. PAUSE RECITATION (Instantly exposes recorded audio for user self-check)
+  // 2. PAUSE RECITATION
   const pauseRecitation = () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       mediaRecorderRef.current.pause();
@@ -432,20 +471,17 @@ export const IkhtebaarTab = () => {
     try {
       setIsRecording(false);
       setIsFinalizingStream(true);
-      setAnalysisStage("Flushing audio recording buffer...");
-      
-      // Stop the recorder, triggering the onstop callback with merged audio bytes
+      setAnalysisStage('Processing final audio...');
       mediaRecorderRef.current.stop();
-
     } catch (err) {
       console.error(err);
-      alert("Failed to wrap up exam: " + err.message);
+      alert('Failed to finish exam: ' + err.message);
       setIsAnalyzing(false);
       setIsFinalizingStream(false);
     }
   };
 
-  // 5. ABORT / DISCARD EXAM RECITATION (Cancels without grading or writing to DB)
+  // 5. ABORT / DISCARD RECITATION
   const abortRecitation = async () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -474,7 +510,7 @@ export const IkhtebaarTab = () => {
     setGradingError('');
     setNudgeActive(false);
     setNudgeText('');
-    
+
     updateIkhtebaar({
       isPaused: false,
       elapsedSeconds: 0,
@@ -489,21 +525,39 @@ export const IkhtebaarTab = () => {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
-  const matchCount = gradeResult?.matches ?? gradeResult?.correct_words_count ?? gradeResult?.comparison?.filter(c => c.status === 'match' || c.status === 'correct').length ?? 0;
-  const mistakeCount = gradeResult?.mistakes ?? gradeResult?.mistake_count ?? gradeResult?.comparison?.filter(c => c.status === 'mistake' || c.status === 'incorrect').length ?? 0;
-  const totalWords = gradeResult?.total ?? gradeResult?.total_words ?? gradeResult?.comparison?.length ?? 0;
+  const matchCount =
+    gradeResult?.matches ??
+    gradeResult?.correct_words_count ??
+    gradeResult?.comparison?.filter((c) => c.status === 'match' || c.status === 'correct').length ??
+    0;
+  const mistakeCount =
+    gradeResult?.mistakes ??
+    gradeResult?.mistake_count ??
+    gradeResult?.comparison?.filter((c) => c.status === 'mistake' || c.status === 'incorrect').length ??
+    0;
+  const totalWords =
+    gradeResult?.total ??
+    gradeResult?.total_words ??
+    gradeResult?.comparison?.length ??
+    0;
+
+  // Dual Anchor identifiers
+  const startSura = Number(currentQuestion?.surah_number || currentQuestion?.question_id?.split('-')[0] || 0);
+  const startAyah = Number(currentQuestion?.ayah_number || currentQuestion?.question_id?.split('-')[1] || 0);
+  const endSura = Number(currentQuestion?.end_surah_number || startSura);
+  const endAyah = Number(currentQuestion?.end_ayah_number || 0);
 
   return (
     <div className="space-y-6 pb-12">
-      {/* 1. Exam Configuration Header */}
+      {/* 1. Exam Configuration Card */}
       <div className="glass-panel-gold rounded-2xl p-6 border border-gold-500/30 shadow-xl space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
           <div>
             <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
-              <Award className="w-5 h-5 text-gold-400" /> Academic Exam Configurator
+              <Award className="w-5 h-5 text-gold-400" /> Oral Examination Configurator
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              Set exam boundaries and difficulty. Algorithm selects non-repeating testing passages.
+              Select your testing range and difficulty to generate an exam prompt.
             </p>
           </div>
 
@@ -541,7 +595,7 @@ export const IkhtebaarTab = () => {
           {rangeMode === 'juz' && (
             <div className="flex items-center gap-4 flex-1 min-w-[280px]">
               <div className="flex-1">
-                <label className="block text-xs font-semibold text-slate-400 mb-1">Select Juz Module (1-30):</label>
+                <label className="block text-xs font-semibold text-slate-400 mb-1">Select Juz:</label>
                 <select
                   value={selectedJuz}
                   onChange={(e) => setSelectedJuz(parseInt(e.target.value, 10))}
@@ -553,7 +607,7 @@ export const IkhtebaarTab = () => {
                 </select>
               </div>
               <div className="p-3 rounded-xl bg-slate-900/90 border border-gold-500/30 text-center">
-                <span className="block text-[10px] text-slate-400 font-semibold uppercase">Exam Boundaries</span>
+                <span className="block text-[10px] text-slate-400 font-semibold uppercase">Exam Span</span>
                 <span className="text-xs font-mono font-bold text-amber-400">Page {fromPage} → {toPage}</span>
               </div>
             </div>
@@ -633,19 +687,21 @@ export const IkhtebaarTab = () => {
                 </button>
               ))}
             </div>
-          </div>          {/* Generate Question Button */}
+          </div>
+
+          {/* Generate Question Button */}
           <button
             onClick={generateQuestion}
             disabled={isLoadingQuestion}
             className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs flex items-center gap-2 shadow-gold-glow transition-all disabled:opacity-50 ml-auto"
           >
             {isLoadingQuestion ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Award className="w-4 h-4" />}
-            <span>Generate Exam Question</span>
+            <span>Generate Question</span>
           </button>
         </div>
       </div>
 
-      {/* 2. Top Prominent Assessment Score Card (Zero-Scroll Visibility) */}
+      {/* 2. Top Prominent Assessment Score Card */}
       {gradeResult && (
         <div 
           ref={assessmentCardRef}
@@ -671,7 +727,7 @@ export const IkhtebaarTab = () => {
               </div>
             </div>
 
-            <div className="flex items-center gap-3 ml-auto">
+            <div className="flex items-center gap-3 ml-auto flex-wrap">
               <div className="px-4 py-2 rounded-xl bg-slate-900/90 border border-slate-800 text-center">
                 <span className="block text-[10px] text-slate-400 font-semibold uppercase">Total Words</span>
                 <span className="text-sm font-bold text-slate-100">{totalWords}</span>
@@ -684,9 +740,20 @@ export const IkhtebaarTab = () => {
                 <span className="block text-[10px] text-red-400 font-semibold uppercase">Mistakes</span>
                 <span className="text-sm font-bold text-red-300">{mistakeCount}</span>
               </div>
+
+              {/* View on Mushaf CTA */}
+              <button
+                onClick={() => handleViewFullPage()}
+                className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs flex items-center gap-1.5 shadow-md transition-all ml-1"
+                title="View exam recitation on the Madani Mushaf"
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>View on Mushaf</span>
+              </button>
+
               <button
                 onClick={() => updateIkhtebaar({ gradeResult: null })}
-                className="p-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-400 hover:text-white border border-slate-700/80 transition-all ml-2"
+                className="p-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-400 hover:text-white border border-slate-700/80 transition-all ml-1"
                 title="Dismiss Assessment Card"
               >
                 <X className="w-4 h-4" />
@@ -703,7 +770,7 @@ export const IkhtebaarTab = () => {
 
           <div className="space-y-3">
             <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
-              <span>Word-by-Word Assessment</span>
+              <span>Word-by-Word Assessment (Tap words to inspect on Mushaf)</span>
               <span className="text-gold-400 font-arabic text-sm">التدقيق الحرفي</span>
             </h4>
 
@@ -714,16 +781,19 @@ export const IkhtebaarTab = () => {
               {gradeResult.comparison?.map((item, idx) => {
                 const isMatch = item.status === 'match' || item.status === 'correct' || item.status === 'bismillah_skipped';
                 return (
-                  <span
+                  <button
                     key={idx}
-                    className={`inline-flex items-center px-3 py-1.5 rounded-xl border text-xl font-bold transition-all shadow-sm ${
+                    type="button"
+                    onClick={() => handleViewFullPage()}
+                    className={`inline-flex items-center px-3 py-1.5 rounded-xl border text-xl font-bold transition-all shadow-sm cursor-pointer hover:scale-105 active:scale-95 ${
                       isMatch
                         ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-300 hover:border-emerald-400'
                         : 'bg-red-950/70 border-red-500/50 text-red-300 hover:border-red-400 ring-1 ring-red-500/30 animate-pulse'
                     }`}
+                    title={isMatch ? 'Recited correctly — click to view on Mushaf' : 'Recitation mistake — click to view on Mushaf'}
                   >
                     {item.word}
-                  </span>
+                  </button>
                 );
               })}
             </div>
@@ -733,11 +803,11 @@ export const IkhtebaarTab = () => {
 
       {/* 3. Question Prompt Card & Audio controls */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-        {/* Left Card: Oral Question Prompt */}
+        {/* Left Card: Exam Question Prompt */}
         <div className="glass-panel rounded-2xl p-6 border border-gold-500/20 shadow-xl space-y-4">
           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
             <h3 className="font-bold text-slate-100 text-sm flex items-center gap-2">
-              <HelpCircle className="w-4 h-4 text-gold-400" /> Exam Verse Selection
+              <HelpCircle className="w-4 h-4 text-gold-400" /> Exam Question
             </h3>
             {currentQuestion && (
               <span className="text-[10px] uppercase font-bold text-amber-400 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-800">
@@ -747,85 +817,83 @@ export const IkhtebaarTab = () => {
           </div>
 
           {currentQuestion ? (() => {
-            const surahName = currentQuestion?.surah_name || `Surah ${currentQuestion?.sura_number || currentQuestion?.surah_number || ""}`;
-            const pageNumber = currentQuestion?.page_number || "";
-            const ayahNumber = currentQuestion?.ayah_number || currentQuestion?.start_ayah_num || "";
-            const arabicText = currentQuestion?.arabic_text || currentQuestion?.start_text || "";
+            const surahName = currentQuestion?.surah_name || `Surah ${currentQuestion?.surah_number || currentQuestion?.sura_number || ''}`;
+            const pageNumber = currentQuestion?.page_number || '';
+            const ayahNumber = currentQuestion?.ayah_number || currentQuestion?.start_ayah_num || '';
+            const arabicText = currentQuestion?.arabic_text || currentQuestion?.start_text || '';
+            const endSurahName = currentQuestion?.end_surah_name || surahName;
+            const endPageNumber = currentQuestion?.end_page_number || pageNumber;
+            const endAyahNumber = currentQuestion?.end_ayah_number || '...';
+            const endArabicText = currentQuestion?.end_arabic_text || currentQuestion?.stop_text || '...';
+
             return (
               <div className="space-y-4">
-                <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-                  <span className="block text-[10px] font-bold text-slate-500 uppercase">Test Instructions:</span>
-                  <p className="text-xs text-slate-300">
-                    Read and recite the verse printed below. Recitation starts at this verse, and you must recite the continuing verses from memory until the exam boundaries stop you.
-                  </p>
-                </div>
+                <p className="text-xs text-slate-400">
+                  Recite aloud from the start verse below until you reach the stop verse.
+                </p>
 
-                {/* Start Ayah Prompt */}
-                <div className="p-5 rounded-xl bg-slate-900/60 border border-emerald-500/30 space-y-3">
-                  <div className="flex items-center justify-between text-xs text-slate-400">
+                {/* Start Ayah Prompt (Emerald Green Anchor) */}
+                <div className="p-4 rounded-xl bg-emerald-950/20 border border-emerald-500/40 space-y-2 shadow-sm">
+                  <div className="flex items-center justify-between text-xs">
                     <span className="text-emerald-400 font-bold flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                      Start Recitation Verse ({surahName}, Page {pageNumber}):
+                      <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                      Start Verse: {surahName}, Ayah {ayahNumber}
                     </span>
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={() => handleViewFullPage(pageNumber)}
-                        className="px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 font-bold text-[10px] uppercase transition-all shadow-sm flex items-center gap-1.5"
-                        title={`View Mushaf pages from Page ${pageNumber} to Page ${currentQuestion?.end_page_number || pageNumber}`}
-                      >
-                        <BookOpen className="w-3.5 h-3.5" />
-                        <span>View Pages ({pageNumber} → {currentQuestion?.end_page_number || pageNumber})</span>
-                      </button>
-                      <span className="font-mono text-amber-400 font-bold">Ayah {ayahNumber}</span>
-                    </div>
+                    <span className="font-mono text-emerald-400/90 text-[11px]">
+                      Page {pageNumber}
+                    </span>
                   </div>
-                  <p dir="rtl" className="font-arabic text-2xl text-amber-100 text-right leading-loose mt-2">
+                  <p dir="rtl" className="font-arabic text-2xl text-emerald-100 text-right leading-loose pt-1">
                     {arabicText}
                   </p>
                 </div>
 
-                {/* Stop Ayah Prompt */}
-                <div className="p-5 rounded-xl bg-red-950/10 border border-red-500/30 space-y-3">
-                  <div className="flex items-center justify-between text-xs text-slate-400">
-                    <span className="text-red-400 font-bold flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-red-400 animate-ping" />
-                      Stop At This Verse (End Point):
+                {/* Stop Ayah Prompt (Amber / Gold Anchor) */}
+                <div className="p-4 rounded-xl bg-amber-950/20 border border-amber-500/40 space-y-2 shadow-sm">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-amber-400 font-bold flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-amber-400" />
+                      Stop Verse: {endSurahName}, Ayah {endAyahNumber}
                     </span>
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={() => handleViewFullPage(currentQuestion?.end_page_number || pageNumber)}
-                        className="px-2.5 py-1 rounded bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/30 font-bold text-[10px] uppercase transition-all shadow-sm flex items-center gap-1.5"
-                        title={`View Stop Verse on Mushaf Page ${currentQuestion?.end_page_number || pageNumber}`}
-                      >
-                        <BookOpen className="w-3.5 h-3.5" />
-                        <span>View Page {currentQuestion?.end_page_number || pageNumber}</span>
-                      </button>
-                      <span className="font-mono text-red-400 font-bold">
-                        {currentQuestion?.end_surah_name || '...'}, Ayah {currentQuestion?.end_ayah_number || '...'} (Page {currentQuestion?.end_page_number || '...'})
-                      </span>
-                    </div>
+                    <span className="font-mono text-amber-400/90 text-[11px]">
+                      Page {endPageNumber}
+                    </span>
                   </div>
-                  <p dir="rtl" className="font-arabic text-2xl text-red-100/90 text-right leading-loose mt-2">
-                    {currentQuestion?.end_arabic_text || currentQuestion?.stop_text || "..."}
+                  <p dir="rtl" className="font-arabic text-2xl text-amber-100/95 text-right leading-loose pt-1">
+                    {endArabicText}
                   </p>
                 </div>
 
+                {/* Single Clean View on Mushaf CTA */}
+                <div className="flex items-center justify-between p-3 rounded-xl bg-slate-900/90 border border-slate-800">
+                  <div className="text-xs text-slate-300 font-medium">
+                    Exam Span: <strong className="text-amber-400">P. {pageNumber}</strong> → <strong className="text-amber-400">P. {endPageNumber}</strong>
+                  </div>
+                  <button
+                    onClick={() => handleViewFullPage()}
+                    className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow transition-all"
+                  >
+                    <BookOpen className="w-3.5 h-3.5" />
+                    <span>View on Mushaf</span>
+                  </button>
+                </div>
+
                 {/* Help Hints Accordion */}
-                <div className="space-y-2 pt-2">
-                  <span className="block text-[10px] font-bold text-slate-500 uppercase">Interactive Scholarship Hints:</span>
+                <div className="space-y-2 pt-1">
+                  <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">Hints & Context:</span>
 
                   {/* Hint 1 */}
                   <div className="rounded-xl bg-slate-950 border border-slate-800 overflow-hidden">
                     <button
                       onClick={() => setActiveHint(activeHint === 'hint_1' ? null : 'hint_1')}
-                      className="w-full p-3 text-left text-xs font-semibold text-slate-300 flex items-center justify-between hover:bg-slate-900 transition-all"
+                      className="w-full p-2.5 text-left text-xs font-semibold text-slate-300 flex items-center justify-between hover:bg-slate-900 transition-all"
                     >
                       <span>Hint 1: First Ayah on Page {pageNumber}</span>
-                      {activeHint === 'hint_1' ? <ChevronUp className="w-4 h-4 text-gold-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+                      {activeHint === 'hint_1' ? <ChevronUp className="w-3.5 h-3.5 text-gold-400" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-400" />}
                     </button>
                     {activeHint === 'hint_1' && (
-                      <div dir="rtl" className="p-4 border-t border-slate-800 text-right font-arabic text-xl text-amber-200 bg-slate-900/60">
-                        {currentQuestion?.hint_1 || "No hint available"}
+                      <div dir="rtl" className="p-3.5 border-t border-slate-800 text-right font-arabic text-xl text-amber-200 bg-slate-900/60">
+                        {currentQuestion?.hint_1 || 'No hint available'}
                       </div>
                     )}
                   </div>
@@ -834,14 +902,14 @@ export const IkhtebaarTab = () => {
                   <div className="rounded-xl bg-slate-950 border border-slate-800 overflow-hidden">
                     <button
                       onClick={() => setActiveHint(activeHint === 'hint_2' ? null : 'hint_2')}
-                      className="w-full p-3 text-left text-xs font-semibold text-slate-300 flex items-center justify-between hover:bg-slate-900 transition-all"
+                      className="w-full p-2.5 text-left text-xs font-semibold text-slate-300 flex items-center justify-between hover:bg-slate-900 transition-all"
                     >
-                      <span>Hint 2: Target Surah Identifier</span>
-                      {activeHint === 'hint_2' ? <ChevronUp className="w-4 h-4 text-gold-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+                      <span>Hint 2: Surah Identifier</span>
+                      {activeHint === 'hint_2' ? <ChevronUp className="w-3.5 h-3.5 text-gold-400" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-400" />}
                     </button>
                     {activeHint === 'hint_2' && (
-                      <div className="p-4 border-t border-slate-800 text-xs font-bold text-amber-300 bg-slate-900/60">
-                        {currentQuestion?.hint_2 || "No hint available"}
+                      <div className="p-3.5 border-t border-slate-800 text-xs font-bold text-amber-300 bg-slate-900/60">
+                        {currentQuestion?.hint_2 || 'No hint available'}
                       </div>
                     )}
                   </div>
@@ -850,14 +918,14 @@ export const IkhtebaarTab = () => {
                   <div className="rounded-xl bg-slate-950 border border-slate-800 overflow-hidden">
                     <button
                       onClick={() => setActiveHint(activeHint === 'hint_3' ? null : 'hint_3')}
-                      className="w-full p-3 text-left text-xs font-semibold text-slate-300 flex items-center justify-between hover:bg-slate-900 transition-all"
+                      className="w-full p-2.5 text-left text-xs font-semibold text-slate-300 flex items-center justify-between hover:bg-slate-900 transition-all"
                     >
                       <span>Hint 3: Preceding Passage Context</span>
-                      {activeHint === 'hint_3' ? <ChevronUp className="w-4 h-4 text-gold-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+                      {activeHint === 'hint_3' ? <ChevronUp className="w-3.5 h-3.5 text-gold-400" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-400" />}
                     </button>
                     {activeHint === 'hint_3' && (
-                      <div dir="rtl" className="p-4 border-t border-slate-800 text-right font-arabic text-xl text-amber-200 bg-slate-900/60">
-                        {currentQuestion?.hint_3 || "No hint available"}
+                      <div dir="rtl" className="p-3.5 border-t border-slate-800 text-right font-arabic text-xl text-amber-200 bg-slate-900/60">
+                        {currentQuestion?.hint_3 || 'No hint available'}
                       </div>
                     )}
                   </div>
@@ -870,22 +938,22 @@ export const IkhtebaarTab = () => {
               {questionError ? (
                 <p className="text-red-400 font-bold">{questionError}</p>
               ) : (
-                <p>Click "Generate Exam Question" above to start an oral examination test.</p>
+                <p>Click "Generate Question" above to begin an oral exam.</p>
               )}
             </div>
           )}
         </div>
 
-        {/* Right Panel: Oral Examination Reciter & Audio Controls */}
+        {/* Right Panel: Recitation & Audio Controls */}
         <div className="glass-panel-gold rounded-2xl p-6 border border-gold-500/30 shadow-xl flex flex-col justify-between space-y-5 lg:sticky lg:top-6 self-start">
           <div>
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <h3 className="font-bold text-slate-100 text-sm flex items-center gap-2">
-                <Mic className="w-4 h-4 text-gold-400" /> Oral Examination Reciter
+                <Mic className="w-4 h-4 text-gold-400" /> Recitation & Grading
               </h3>
               {isStartingRecording ? (
                 <span className="font-mono text-xs font-bold text-amber-400 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-800 animate-pulse flex items-center gap-1">
-                  <RefreshCw className="w-3 h-3 animate-spin text-amber-400" /> Activating Mic...
+                  <RefreshCw className="w-3 h-3 animate-spin text-amber-400" /> Connecting...
                 </span>
               ) : isRecording ? (
                 <span className={`font-mono text-xs font-bold px-2 py-0.5 rounded border ${
@@ -893,13 +961,10 @@ export const IkhtebaarTab = () => {
                     ? 'text-yellow-400 bg-yellow-950/40 border-yellow-800' 
                     : 'text-red-400 bg-red-950 border-red-800 animate-pulse'
                 }`}>
-                  {isPaused ? "PAUSED" : "REC"}: {formatTime(elapsedSeconds)}
+                  {isPaused ? 'PAUSED' : 'REC'}: {formatTime(elapsedSeconds)}
                 </span>
               ) : null}
             </div>
-            <p className="text-xs text-slate-400 mt-2">
-              Click <strong>"Initiate Recitation"</strong> to record. Chunks are automatically dispatched to the Whisper AI model. Click <strong>"Conclude Recitation"</strong> to submit and grade.
-            </p>
           </div>
 
           {/* Live Audio Visualizer */}
@@ -910,13 +975,13 @@ export const IkhtebaarTab = () => {
             {isStartingRecording ? (
               <div className="py-4 rounded-xl bg-slate-900 border border-amber-500/40 text-center text-amber-300 text-xs font-bold flex items-center justify-center gap-2 animate-pulse">
                 <RefreshCw className="w-4 h-4 animate-spin text-amber-400" />
-                <span>Activating Microphone & Audio Graph...</span>
+                <span>Activating Microphone...</span>
               </div>
             ) : isFinalizingStream ? (
               <div className="p-4 rounded-xl bg-slate-900 border border-amber-500/40 text-center space-y-2 animate-pulse">
                 <div className="flex items-center justify-center gap-2 text-amber-300 text-xs font-bold">
                   <RefreshCw className="w-4 h-4 animate-spin text-amber-400" />
-                  <span>Merging Audio Chunks & Finalizing Stream...</span>
+                  <span>Grading Recitation...</span>
                 </div>
               </div>
             ) : isAnalyzing ? (
@@ -929,10 +994,10 @@ export const IkhtebaarTab = () => {
                     <span className="font-mono text-amber-400 font-extrabold">{analysisProgress}%</span>
                     <button
                       onClick={abortRecitation}
-                      className="p-1 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 transition-all ml-1"
-                      title="Cancel Evaluation"
+                      className="p-1 rounded-md bg-red-950/60 hover:bg-red-900 text-red-300 border border-red-500/40 text-[10px] transition-all flex items-center gap-1"
+                      title="Abort and discard evaluation"
                     >
-                      <X className="w-3.5 h-3.5" />
+                      <Trash2 className="w-3 h-3" /> Abort
                     </button>
                   </div>
                 </div>
@@ -954,7 +1019,7 @@ export const IkhtebaarTab = () => {
                 <button
                   onClick={initiateRecitation}
                   disabled={!currentQuestion || !isModelReady || isStartingRecording}
-                  className={`w-full py-4 rounded-xl font-extrabold text-sm flex items-center justify-center gap-2 transition-all shadow-lg ${
+                  className={`w-full py-3.5 rounded-xl font-extrabold text-sm flex items-center justify-center gap-2 transition-all shadow-lg ${
                     !isModelReady
                       ? 'bg-amber-950/60 border border-amber-500/30 text-amber-300 cursor-not-allowed opacity-80'
                       : !currentQuestion
@@ -964,12 +1029,12 @@ export const IkhtebaarTab = () => {
                 >
                   {!isModelReady ? (
                     <>
-                      <RefreshCw className="w-5 h-5 animate-spin text-amber-400" />
-                      <span>Engine Initializing...</span>
+                      <RefreshCw className="w-4 h-4 animate-spin text-amber-400" />
+                      <span>Model Initializing...</span>
                     </>
                   ) : (
                     <>
-                      <Mic className="w-5 h-5" />
+                      <Mic className="w-4 h-4" />
                       <span>Start Recitation</span>
                     </>
                   )}
@@ -977,14 +1042,14 @@ export const IkhtebaarTab = () => {
 
                 {/* Audio Self-Auditing & Playback Controls */}
                 {recordedAudioUrl && (
-                  <div className="p-4 rounded-xl bg-slate-950/90 border border-gold-500/30 space-y-3 animate-fadeIn shadow-lg">
+                  <div className="p-3.5 rounded-xl bg-slate-950/90 border border-gold-500/30 space-y-2.5 animate-fadeIn shadow-lg">
                     <div className="flex items-center justify-between">
                       <span className="text-[11px] font-bold uppercase tracking-wider text-gold-300 flex items-center gap-1.5">
-                        <Volume2 className="w-3.5 h-3.5 text-amber-400" /> Recitation Playback:
+                        <Volume2 className="w-3.5 h-3.5 text-amber-400" /> Playback:
                       </span>
                       {/* Playback speed selector */}
                       <div className="flex items-center gap-1 bg-slate-900 px-1.5 py-0.5 rounded-lg border border-slate-800 text-[10px] font-mono">
-                        {[0.75, 1.0, 1.25].map(spd => (
+                        {[0.75, 1.0, 1.25].map((spd) => (
                           <button
                             key={spd}
                             onClick={() => {
@@ -1003,7 +1068,7 @@ export const IkhtebaarTab = () => {
                       ref={audioPlayerRef}
                       src={recordedAudioUrl}
                       controls
-                      className="w-full h-10 rounded-lg accent-amber-500"
+                      className="w-full h-9 rounded-lg accent-amber-500"
                     />
                     
                     <div className="flex items-center gap-2">
@@ -1042,68 +1107,54 @@ export const IkhtebaarTab = () => {
                   ) : (
                     <button
                       onClick={pauseRecitation}
-                      className="flex-1 py-3 rounded-xl bg-slate-800 border border-slate-700 hover:bg-slate-700 text-amber-400 font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md"
+                      className="flex-1 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-gold-300 font-extrabold text-xs flex items-center justify-center gap-1.5 border border-gold-500/30 transition-all shadow-md"
                     >
                       <Pause className="w-4 h-4" /> Pause
                     </button>
                   )}
 
-                  {/* Immediate Abort/Discard Icon Button */}
                   <button
                     onClick={abortRecitation}
-                    className="p-3 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 hover:border-red-500/60 transition-all flex items-center justify-center shadow-md shrink-0"
-                    title="Discard Recitation"
+                    className="p-3 rounded-xl bg-red-950/60 hover:bg-red-900 text-red-300 border border-red-500/40 transition-all"
+                    title="Abort Recitation"
                   >
-                    <X className="w-4 h-4" />
+                    <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
 
+                {/* Conclude Exam Button */}
                 <button
                   onClick={concludeRecitation}
-                  className="w-full py-4 rounded-xl bg-gradient-to-r from-red-500 to-red-600 hover:from-red-400 hover:to-red-500 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-lg shadow-red-500/30 transition-all"
+                  className="w-full py-3.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-extrabold text-sm flex items-center justify-center gap-2 shadow-gold-glow transition-all active:scale-[0.99]"
                 >
-                  <MicOff className="w-5 h-5" />
-                  <span>Finish & Evaluate</span>
+                  <CheckCircle2 className="w-5 h-5" />
+                  <span>Conclude Recitation & Grade</span>
                 </button>
-
-                {/* Instant Audio Snapshot on Pause */}
-                {isPaused && recordedAudioUrl && (
-                  <div className="p-3 rounded-xl bg-slate-950/90 border border-amber-500/40 space-y-2 animate-fadeIn">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1">
-                      <Volume2 className="w-3 h-3" /> Audio Preview:
-                    </span>
-                    <audio src={recordedAudioUrl} controls className="w-full h-8 accent-amber-500" />
-                  </div>
-                )}
               </div>
             )}
 
-            {/* Non-blocking inline grading error indicator */}
+            {/* Error or Nudge Banners */}
             {gradingError && (
-              <div className="p-4 rounded-xl bg-red-950/80 border border-red-500/40 text-red-300 text-xs font-bold flex items-center gap-2 animate-fadeIn">
-                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+              <div className="p-3 rounded-xl bg-red-950/80 border border-red-500/50 text-red-200 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
                 <span>{gradingError}</span>
               </div>
             )}
 
-            {/* Live Muhaffiz Gentle Nudge Banner */}
             {nudgeActive && (
-              <div className="p-3 rounded-xl bg-amber-950/90 border border-amber-500/60 text-amber-300 text-xs font-bold flex items-center justify-between shadow-gold-glow animate-pulse">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-amber-400 animate-spin-slow" />
-                  <span>{nudgeText || "Take a moment — recite the upcoming word carefully..."}</span>
-                </div>
-                <span className="text-[10px] uppercase bg-amber-900 text-amber-200 px-2.5 py-0.5 rounded-md border border-amber-600 font-extrabold tracking-wider">Muhaffiz Hint</span>
+              <div className="p-3 rounded-xl bg-amber-950/80 border border-amber-500/50 text-amber-200 text-xs flex items-center gap-2 animate-bounce">
+                <Sparkles className="w-4 h-4 shrink-0 text-amber-400" />
+                <span>{nudgeText}</span>
               </div>
             )}
 
-            {/* Real-time transcription dynamic panel with scroll control and conditional word styling */}
+            {/* Real-time transcription dynamic panel */}
             <div className="p-4 rounded-xl bg-slate-950/85 border border-slate-800 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                  Live Recitation Progress:
+                  Live Recitation:
                 </span>
-                <span className="text-gold-400 font-arabic text-sm" dir="rtl">متابعة التسميع المباشر</span>
+                <span className="text-gold-400 font-arabic text-sm" dir="rtl">متابعة التسميع</span>
               </div>
               <div 
                 ref={correctionsContainerRef}
@@ -1112,7 +1163,7 @@ export const IkhtebaarTab = () => {
               >
                 {(() => {
                   const verifiedWords = (transcriptionData || []).filter(
-                    item => item.isRawString || (item.status && item.status !== 'pending')
+                    (item) => item.isRawString || (item.status && item.status !== 'pending')
                   );
 
                   if (verifiedWords.length > 0) {
@@ -1129,20 +1180,20 @@ export const IkhtebaarTab = () => {
                       const isMistake = item.status === 'mistake' || item.status === 'incorrect';
                       const wordText = item.word || item.text || (typeof item === 'string' ? item : JSON.stringify(item));
                       
-                      let styleClass = "text-slate-400";
+                      let styleClass = 'text-slate-400';
                       if (isCorrect) {
-                        styleClass = "text-emerald-400 font-bold bg-emerald-950/50 border border-emerald-500/40 px-2 py-0.5 rounded-lg shadow-sm";
+                        styleClass = 'text-emerald-400 font-bold bg-emerald-950/50 border border-emerald-500/40 px-2 py-0.5 rounded-lg shadow-sm';
                       } else if (isSkipped) {
-                        styleClass = "text-slate-400 italic text-xl border-b border-slate-700/60 bg-slate-900/40 px-1.5 py-0.5 rounded";
+                        styleClass = 'text-slate-400 italic text-xl border-b border-slate-700/60 bg-slate-900/40 px-1.5 py-0.5 rounded';
                       } else if (isMistake) {
-                        styleClass = "text-red-400 line-through decoration-red-500/80 decoration-2 font-bold bg-red-950/50 border border-red-500/40 px-2 py-0.5 rounded-lg";
+                        styleClass = 'text-red-400 line-through decoration-red-500/80 decoration-2 font-bold bg-red-950/50 border border-red-500/40 px-2 py-0.5 rounded-lg';
                       }
 
                       return (
                         <span
                           key={idx}
                           className={`inline-block mx-1 my-0.5 transition-all duration-200 ${styleClass}`}
-                          title={isSkipped ? "Bismillah skipped (optional opening)" : isCorrect ? "Recited correctly" : isMistake ? "Recitation mistake" : ""}
+                          title={isSkipped ? 'Bismillah skipped' : isCorrect ? 'Recited correctly' : isMistake ? 'Mistake' : ''}
                         >
                           {wordText}
                         </span>
@@ -1158,7 +1209,7 @@ export const IkhtebaarTab = () => {
                           Listening... Recite in Arabic
                         </span>
                       ) : (
-                        "Awaiting recitation start..."
+                        'Awaiting recitation start...'
                       )}
                     </div>
                   );
@@ -1169,79 +1220,237 @@ export const IkhtebaarTab = () => {
         </div>
       </div>
 
-
+      {/* Multi-Page Manuscript Lightbox Modal with Dual-Anchor Highlighting (Start: Green, Stop: Amber) */}
       {isZoomed && zoomedPageList.length > 0 && (
-        <div 
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-fadeIn cursor-zoom-out"
-          onClick={() => setIsZoomed(false)}
-        >
-          {/* Previous Page Navigation */}
-          {currentZoomedIndex > 0 && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setCurrentZoomedIndex(prev => Math.max(0, prev - 1));
-              }}
-              className="absolute left-6 top-1/2 -translate-y-1/2 z-50 text-white hover:text-amber-400 bg-slate-900/60 hover:bg-slate-900/90 border border-slate-700/50 w-12 h-12 rounded-full flex items-center justify-center shadow-2xl transition-all cursor-pointer"
-              title="Previous Page"
-            >
-              <ChevronLeft className="w-6 h-6" />
-            </button>
-          )}
-
-          {/* Next Page Navigation */}
-          {currentZoomedIndex < zoomedPageList.length - 1 && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setCurrentZoomedIndex(prev => Math.min(zoomedPageList.length - 1, prev + 1));
-              }}
-              className="absolute right-6 top-1/2 -translate-y-1/2 z-50 text-white hover:text-amber-400 bg-slate-900/60 hover:bg-slate-900/90 border border-slate-700/50 w-12 h-12 rounded-full flex items-center justify-center shadow-2xl transition-all cursor-pointer"
-              title="Next Page"
-            >
-              <ChevronRight className="w-6 h-6" />
-            </button>
-          )}
-
-          <div className="relative max-w-full max-h-[90vh] flex flex-col items-center justify-center">
-            <button
-              onClick={() => setIsZoomed(false)}
-              className="absolute top-4 right-4 z-50 text-white hover:text-red-400 font-extrabold text-lg bg-black/60 hover:bg-black/85 w-10 h-10 rounded-full flex items-center justify-center shadow-lg transition-all cursor-pointer"
-              title="Close Enlarged View"
-            >
-              ✕
-            </button>
-            
-            {(() => {
-              const safePageList = Array.isArray(zoomedPageList) ? zoomedPageList : [];
-              const safeIndex = (currentZoomedIndex >= 0 && currentZoomedIndex < safePageList.length) ? currentZoomedIndex : 0;
-              const pageNum = safePageList[safeIndex];
-              
-              if (!pageNum) {
-                return (
-                  <div className="text-slate-500 text-xs font-semibold py-8">
-                    Loading page...
-                  </div>
-                );
-              }
-              
-              return (
-                <div className="flex flex-col items-center space-y-2 select-none">
-                  <span className="text-slate-300 font-bold font-mono text-xs bg-slate-950/80 border border-slate-800 px-3 py-1 rounded-full shadow-lg">
-                    Page {pageNum} ({safeIndex + 1} of {safePageList.length})
-                  </span>
-                  <img
-                    src={`/api/page_image/${pageNum}`}
-                    alt={`Madani Quran Page ${pageNum}`}
-                    className="max-h-[82vh] max-w-full object-contain rounded-lg shadow-2xl border border-slate-800 cursor-default animate-scaleIn select-none"
-                    onClick={(e) => e.stopPropagation()}
-                  />
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/85 backdrop-blur-md animate-fadeIn">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-4xl w-full max-h-[95vh] flex flex-col shadow-2xl overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-xl bg-amber-500/15 text-amber-600 dark:text-gold-400 border border-amber-500/30">
+                  <Award className="w-4 h-4" />
                 </div>
-              );
-            })()}
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-sm font-bold font-mono uppercase tracking-wider text-slate-900 dark:text-slate-100">
+                      Madani Mushaf • Exam Pages
+                    </h3>
+                    <span className="text-xs text-amber-600 dark:text-gold-400 font-bold bg-amber-500/10 px-2 py-0.5 rounded-md border border-amber-500/20">
+                      Page {currentModalPage} ({currentZoomedIndex + 1}/{zoomedPageList.length})
+                    </span>
+                  </div>
+
+                  {/* Dual-Anchor Badges in Header */}
+                  {currentQuestion && (
+                    <div className="flex items-center gap-2 mt-1 flex-wrap text-[10px] font-mono">
+                      <span className="flex items-center gap-1 text-emerald-400 font-bold bg-emerald-950/60 border border-emerald-500/40 px-2 py-0.5 rounded">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        Start: {currentQuestion.surah_name || `Surah ${startSura}`} ({currentQuestion.ayah_number || startAyah}) • P. {currentQuestion.page_number}
+                      </span>
+                      <span className="flex items-center gap-1 text-amber-400 font-bold bg-amber-950/60 border border-amber-500/40 px-2 py-0.5 rounded">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                        Stop: {currentQuestion.end_surah_name || `Surah ${endSura}`} ({currentQuestion.end_ayah_number || endAyah}) • P. {currentQuestion.end_page_number}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Header Controls */}
+              <div className="flex items-center gap-2">
+                {/* Previous Page Navigation */}
+                <button
+                  onClick={() => setCurrentZoomedIndex((prev) => Math.max(0, prev - 1))}
+                  disabled={currentZoomedIndex <= 0}
+                  className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 disabled:opacity-30 hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+                  title="Previous Page (RTL Next)"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+
+                {/* Next Page Navigation */}
+                <button
+                  onClick={() => setCurrentZoomedIndex((prev) => Math.min(zoomedPageList.length - 1, prev + 1))}
+                  disabled={currentZoomedIndex >= zoomedPageList.length - 1}
+                  className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 disabled:opacity-30 hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+                  title="Next Page (RTL Prev)"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+
+                <div className="h-4 w-px bg-slate-300 dark:bg-slate-700 mx-1" />
+
+                <button
+                  onClick={() => setModalZoom((z) => Math.max(0.8, Number((z - 0.2).toFixed(1))))}
+                  className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+                  title="Zoom Out"
+                >
+                  <ZoomOut className="w-4 h-4" />
+                </button>
+                <span className="text-xs font-mono font-bold text-slate-500 w-10 text-center">
+                  {Math.round(modalZoom * 100)}%
+                </span>
+                <button
+                  onClick={() => setModalZoom((z) => Math.min(2.0, Number((z + 0.2).toFixed(1))))}
+                  className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+                  title="Zoom In"
+                >
+                  <ZoomIn className="w-4 h-4" />
+                </button>
+
+                <button
+                  onClick={() => {
+                    handleJumpToTilawat(currentModalPage);
+                    setIsZoomed(false);
+                  }}
+                  className="hidden sm:flex px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs items-center gap-1.5 shadow transition-all"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Open in Tilawat</span>
+                </button>
+
+                <button
+                  onClick={() => setIsZoomed(false)}
+                  className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 ml-1 transition-all"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body with Dual-Anchor Highlighting Overlay */}
+            <div className="flex-1 overflow-auto p-4 flex items-center justify-center bg-slate-100 dark:bg-slate-950 select-none relative min-h-[400px]">
+              {loadingModalBoxes ? (
+                <div className="flex flex-col items-center justify-center gap-3 text-amber-500 py-20">
+                  <RefreshCw className="w-8 h-8 animate-spin" />
+                  <span className="text-xs font-semibold font-mono uppercase tracking-wider">
+                    Loading Manuscript Page...
+                  </span>
+                </div>
+              ) : (
+                <div
+                  className="relative inline-block mx-auto rounded-2xl overflow-hidden bg-amber-50/5 shadow-2xl p-0 m-0 border border-gold-500/30 max-w-full"
+                  style={{
+                    transform: `scale(${modalZoom})`,
+                    transformOrigin: 'center top',
+                    transition: 'transform 0.15s ease-out'
+                  }}
+                >
+                  <img
+                    src={`/api/page_image/${currentModalPage}`}
+                    alt={`Manuscript Page ${currentModalPage}`}
+                    onLoad={(e) => {
+                      const { naturalWidth, naturalHeight } = e.target;
+                      if (naturalWidth && naturalHeight) {
+                        setModalDimensions({ width: naturalWidth, height: naturalHeight });
+                      }
+                    }}
+                    className="block max-h-[65vh] w-auto object-contain p-0 m-0 mx-auto select-none pointer-events-none"
+                  />
+
+                  {/* Overlaid Dual-Anchor Highlight Boxes */}
+                  {modalBoxes.map((box, idx) => {
+                    const isStartVerse = Number(box.sura) === startSura && Number(box.ayah) === startAyah;
+                    const isEndVerse = Number(box.sura) === endSura && Number(box.ayah) === endAyah;
+
+                    // Range check for intermediate verses
+                    const isWithinExamRange = (() => {
+                      if (isStartVerse || isEndVerse) return false;
+                      if (!startSura || !endSura) return false;
+                      if (startSura === endSura) {
+                        return Number(box.sura) === startSura && Number(box.ayah) > startAyah && Number(box.ayah) < endAyah;
+                      }
+                      if (Number(box.sura) === startSura) return Number(box.ayah) > startAyah;
+                      if (Number(box.sura) === endSura) return Number(box.ayah) < endAyah;
+                      return Number(box.sura) > startSura && Number(box.sura) < endSura;
+                    })();
+
+                    const leftPct = (box.min_x / modalDimensions.width) * 100;
+                    const topPct = (box.min_y / modalDimensions.height) * 100;
+                    const widthPct = ((box.max_x - box.min_x) / modalDimensions.width) * 100;
+                    const heightPct = ((box.max_y - box.min_y) / modalDimensions.height) * 100;
+
+                    if (isStartVerse) {
+                      return (
+                        <div
+                          key={`ikhtebaar-start-${box.global_id}-${idx}`}
+                          className="absolute z-30 rounded-md bg-emerald-500/35 border-2 border-emerald-400 shadow-emerald-glow ring-2 ring-emerald-400/60 animate-pulse transition-all"
+                          style={{
+                            left: `${leftPct}%`,
+                            top: `${topPct}%`,
+                            width: `${widthPct}%`,
+                            height: `${heightPct}%`
+                          }}
+                          title={`Start Verse: Surah ${box.sura}, Ayah ${box.ayah}`}
+                        >
+                          <div className="absolute -bottom-1 left-0 right-0 h-1 bg-emerald-400 rounded-full shadow-md" />
+                        </div>
+                      );
+                    }
+
+                    if (isEndVerse) {
+                      return (
+                        <div
+                          key={`ikhtebaar-end-${box.global_id}-${idx}`}
+                          className="absolute z-30 rounded-md bg-amber-400/35 border-2 border-amber-400 shadow-gold-glow ring-2 ring-amber-400/60 animate-pulse transition-all"
+                          style={{
+                            left: `${leftPct}%`,
+                            top: `${topPct}%`,
+                            width: `${widthPct}%`,
+                            height: `${heightPct}%`
+                          }}
+                          title={`Stop Verse: Surah ${box.sura}, Ayah ${box.ayah}`}
+                        >
+                          <div className="absolute -bottom-1 left-0 right-0 h-1 bg-amber-400 rounded-full shadow-md" />
+                        </div>
+                      );
+                    }
+
+                    if (isWithinExamRange) {
+                      return (
+                        <div
+                          key={`ikhtebaar-range-${box.global_id}-${idx}`}
+                          className="absolute z-10 rounded-md bg-amber-500/10 border border-amber-500/30 transition-all"
+                          style={{
+                            left: `${leftPct}%`,
+                            top: `${topPct}%`,
+                            width: `${widthPct}%`,
+                            height: `${heightPct}%`
+                          }}
+                          title={`Tested Passage: Surah ${box.sura}, Ayah ${box.ayah}`}
+                        />
+                      );
+                    }
+
+                    return null;
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Bottom Footer with Dual-Anchor Legend */}
+            <div className="px-6 py-3 border-t border-slate-200 dark:border-slate-800 bg-amber-50/40 dark:bg-slate-950 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500 font-mono">
+              <div className="flex items-center gap-4 flex-wrap">
+                <span className="flex items-center gap-1.5 text-emerald-400 font-bold">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
+                  <span>Start Verse</span>
+                </span>
+                <span className="flex items-center gap-1.5 text-amber-400 font-bold">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+                  <span>Stop Verse</span>
+                </span>
+                <span className="flex items-center gap-1.5 text-amber-200/60">
+                  <span className="w-2 h-2 rounded bg-amber-500/30 border border-amber-500/50" />
+                  <span>Exam Span</span>
+                </span>
+              </div>
+              <span>Use Left/Right Arrow Keys to browse pages</span>
+            </div>
           </div>
         </div>
       )}
     </div>
   );
 };
+
+export default IkhtebaarTab;
