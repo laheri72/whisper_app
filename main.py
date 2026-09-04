@@ -1997,4 +1997,29 @@ async def get_range_retention_map(request: Request, start_page: int = 1, end_pag
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    import argparse
+    import socket
+
+    parser = argparse.ArgumentParser(description="Academic Quranic Portal - Production Server")
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="Host IP address to bind to (e.g. 127.0.0.1 or 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=8000, help="Port to run the server on (default: 8000)")
+    parser.add_argument("--reload", action="store_true", default=False, help="Enable auto-reload for development")
+    args = parser.parse_args()
+
+    print("=" * 65)
+    print("  ACADEMIC QURANIC PORTAL - STANDALONE SERVER")
+    print("=" * 65)
+    print(f"  Local Access:   http://localhost:{args.port}")
+    if args.host == "0.0.0.0":
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            lan_ip = s.getsockname()[0]
+            s.close()
+            print(f"  Campus LAN:     http://{lan_ip}:{args.port}")
+        except Exception:
+            print(f"  Campus LAN:     http://<your-machine-ip>:{args.port}")
+    print("=" * 65)
+
+    uvicorn.run("main:app", host=args.host, port=args.port, reload=args.reload)
+
